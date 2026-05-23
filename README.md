@@ -177,3 +177,23 @@ are preserved on refresh.
 
 That's it. Open Claude Code in any project and the first user message
 auto-loads infoguana's project context.
+
+## Wire up a project
+
+For each project where Claude Code should use infoguana, drop a small
+`CLAUDE.md` into the project root. The init script writes one from a
+template:
+
+```bash
+python scripts/init-project-infoguana.py <project-name> [target-dir]
+```
+
+`<project-name>` is the key infoguana uses to scope notes (usually the
+repo's directory name — keep it consistent so notes stay grouped). If
+`[target-dir]` is omitted, the file lands in the current directory.
+
+After writing, edit the generated `CLAUDE.md` to fill in the one-line
+project description and `<AUTHOR>` placeholder. Then open the project in
+Claude Code — the first prompt arrives with the SessionStart-injected
+infoguana context plus this CLAUDE.md's guidance, and all subsequent
+`add` / `search` / `context` calls are scoped to `<project-name>`.

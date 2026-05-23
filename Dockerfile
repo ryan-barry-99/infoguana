@@ -33,7 +33,11 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='${
 
 COPY app ./app
 COPY scripts ./scripts
-RUN chmod +x /app/scripts/docker-entrypoint.sh
+# Strip CRLF -> LF on the entrypoint in case the host checked it out with
+# Windows line endings (Git for Windows defaults to core.autocrlf=true).
+# Belt and suspenders with .gitattributes.
+RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
+    && chmod +x /app/scripts/docker-entrypoint.sh
 
 ENV INFOGUANA_DB_PATH=/data/infoguana.db \
     INFOGUANA_BACKUP_DIR=/backups

@@ -1,0 +1,13 @@
+# Force LF line endings on shell scripts that run inside the Linux
+# container. Without this, Git for Windows (with default core.autocrlf=true)
+# rewrites them to CRLF on checkout, and the container fails to exec the
+# entrypoint with the misleading "no such file or directory" error.
+*.sh text eol=lf
+
+# Dockerfile and compose YAML are container-side too.
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+
+# Python files: also LF for consistency. Python is line-ending-agnostic at
+# runtime, but uniform endings avoid noisy diffs across platforms.
+*.py text eol=lf

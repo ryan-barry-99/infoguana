@@ -113,8 +113,8 @@ in a different repo — sees that knowledge surface again.
 
 ## Quick start (Docker)
 
-Requires Docker (with Compose v2) and Python 3.10+ on the host. Works on
-Linux, macOS, and Windows.
+Requires Docker Compose **2.24+** (bundled with Docker Desktop 4.27+) and
+Python 3.10+ on the host. Works on Linux, macOS, and Windows.
 
 ```bash
 git clone <this repo> infoguana && cd infoguana
@@ -142,7 +142,8 @@ python scripts/install-infoguana-mcp.py
 After install, restart any open Claude Code sessions and run `/mcp list`
 to confirm `infoguana` is connected.
 
-See [DEPLOY.md](DEPLOY.md) for backups, updating, and optional knobs.
+See [DEPLOY.md](DEPLOY.md) for backups, updating, and optional knobs, or
+[Troubleshooting](#troubleshooting) below for common bringup gotchas.
 
 ## Local dev
 
@@ -234,3 +235,42 @@ In both options, the resulting `CLAUDE.md` tells the agent: use
 infoguana's MCP for all memory in this project, scope every call to
 `<project-name>`, treat previews as triage-not-citation, and defer the
 full infoguana protocol to the SessionStart preamble.
+
+## Troubleshooting
+
+**`data/mcp.json not found` after `docker compose up`.** The container
+entrypoint writes that file as it starts up. The installer waits up to 5
+seconds for it to appear. If the host filesystem is slow (e.g. a network
+share, WSL2 on a network drive), give it more time and re-run the
+installer. The script is idempotent.
+
+**`docker compose logs infoguana` shows an old error after a rebuild.**
+Compose can hold stale container state between rebuilds, especially when
+the working directory changed since the last `up`. Force a clean recreate:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+**Container restart loop with `exec /app/scripts/docker-entrypoint.sh:
+no such file or directory`.** Line endings — your git checkout converted
+the entrypoint to CRLF. The repo ships a `.gitattributes` that pins
+`*.sh` to LF, but if you cloned before that landed or your git config
+overrides it, re-clone (or `git rm --cached -r . && git reset --hard`).
+The Dockerfile also strips `\r` from the entrypoint as a fallback.
+
+**`PermissionError` reading `data/.mcp_secret` from the installer.**
+Stale state from a pre-PUID/PGID container. The current entrypoint
+chowns `/data` to the host user on every start, so rebuild + restart:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+If that doesn't clear it: `sudo chown -R $USER:$USER data/`.
+
+**`/mcp list` in Claude Code doesn't show `infoguana`.** Restart all
+open Claude Code sessions after running the installer — the MCP client
+config is read on session start, not refreshed live.

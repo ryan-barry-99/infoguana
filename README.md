@@ -181,8 +181,15 @@ auto-loads infoguana's project context.
 ## Wire up a project
 
 For each project where Claude Code should use infoguana, drop a small
-`CLAUDE.md` into the project root. The init script writes one from a
-template:
+`CLAUDE.md` that tells the agent to consult infoguana on every task.
+There are two ways to put one in place, depending on whether you want
+the file committed or kept user-private:
+
+### Option A — committed to the repo (`init-project-infoguana.py`)
+
+Best when you're the only contributor or everyone on the team also uses
+infoguana. The CLAUDE.md lands in the project root and gets tracked by
+git.
 
 ```bash
 python scripts/init-project-infoguana.py <project-name> [target-dir]
@@ -191,9 +198,39 @@ python scripts/init-project-infoguana.py <project-name> [target-dir]
 `<project-name>` is the key infoguana uses to scope notes (usually the
 repo's directory name — keep it consistent so notes stay grouped). If
 `[target-dir]` is omitted, the file lands in the current directory.
-
 After writing, edit the generated `CLAUDE.md` to fill in the one-line
-project description and `<AUTHOR>` placeholder. Then open the project in
-Claude Code — the first prompt arrives with the SessionStart-injected
-infoguana context plus this CLAUDE.md's guidance, and all subsequent
-`add` / `search` / `context` calls are scoped to `<project-name>`.
+project description and `<AUTHOR>` placeholder, then commit.
+
+### Option B — user-private (`infoguana-onboard` Claude Code skill)
+
+Best on shared / public repos where you don't want infoguana-specific
+files in the tree. The skill writes CLAUDE.md into Claude Code's own
+project data folder (`~/.claude/projects/<slug>/memory/CLAUDE.md` on
+Linux/macOS, equivalent on Windows) where only your Claude Code session
+sees it.
+
+Install the skill once:
+
+```bash
+# Linux / macOS
+mkdir -p ~/.claude/skills
+cp -r skills/infoguana-onboard ~/.claude/skills/
+```
+
+```powershell
+# Windows
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
+Copy-Item -Recurse skills/infoguana-onboard "$env:USERPROFILE\.claude\skills\"
+```
+
+Then in any project, tell Claude Code: *"onboard this project to
+infoguana"* — the skill fills in the project name, description, and
+author from the repo context and writes the file. Restart the session
+to pick it up.
+
+---
+
+In both options, the resulting `CLAUDE.md` tells the agent: use
+infoguana's MCP for all memory in this project, scope every call to
+`<project-name>`, treat previews as triage-not-citation, and defer the
+full infoguana protocol to the SessionStart preamble.

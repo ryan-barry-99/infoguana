@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="app/static/infoguana.png" alt="infoguana" width="220">
+</p>
+
 # Infoguana
 
 Cross-project second brain. FastAPI + SQLite (with sqlite-vec + FTS5) +

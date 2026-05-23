@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}projects · infoguana{% endblock %}
+{% block main_class %}max-w-4xl mx-auto px-4 py-6{% endblock %}
+{% block content %}
+<section>
+  <div class="flex items-center justify-between mb-3">
+    <h1 class="text-xs uppercase tracking-wider text-slate-500">projects</h1>
+    {% if hidden %}
+    <div class="relative">
+      <button type="button" onclick="infoguanaToggleHiddenMenu(); event.stopPropagation();"
+        class="text-xs text-slate-400 hover:text-slate-100 px-2 py-1 rounded-lg hover:bg-slate-800 inline-flex items-center gap-1">
+        hidden ({{ hidden|length }})
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 opacity-70">
+          <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"/>
+        </svg>
+      </button>
+      <div id="hidden-menu" class="hidden absolute right-0 mt-1 z-20 min-w-[14rem] rounded-lg bg-slate-900 border border-slate-700 shadow-lg overflow-hidden text-sm">
+        <div class="px-3 py-1.5 text-xs uppercase tracking-wider text-slate-500 border-b border-slate-800">hidden projects</div>
+        {% for name in hidden %}
+        <div class="flex items-center justify-between gap-2 px-3 py-1.5 hover:bg-slate-800">
+          <span class="text-slate-300 truncate">{{ name }}</span>
+          <button type="button" onclick="infoguanaSetProjectHidden('{{ name }}', false, this); event.stopPropagation();"
+            class="text-xs text-indigo-300 hover:text-indigo-200">unhide</button>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="rounded-xl border border-slate-800 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-900 text-slate-400 text-xs uppercase tracking-wider">
+        <tr>
+          <th class="text-left px-3 py-2 font-medium">project</th>
+          <th class="text-right px-3 py-2 font-medium" title="plan · not started + task · not started">not started</th>
+          <th class="text-right px-3 py-2 font-medium" title="plan · in progress + task · in progress">in progress</th>
+          <th class="text-right px-3 py-2 font-medium" title="plan · complete + task · complete">complete</th>
+          <th class="text-right px-3 py-2 font-medium">notes</th>
+          <th class="text-right px-3 py-2 font-medium">last activity</th>
+          <th class="w-8"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          {% set has_notes = row.total_notes > 0 %}
+          <tr id="project-row-{{ row.project or '__none__' }}"
+              class="group border-t border-slate-800 hover:bg-slate-900/50 transition {% if not has_notes %}text-slate-600{% endif %}">
+            <td class="px-3 py-2">
+              {% if row.project %}
+                <a href="/browse?project={{ row.project }}" class="text-indigo-300 hover:text-indigo-200">{{ row.project }}</a>
+              {% else %}
+                <span class="italic text-slate-500">no project</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-right tabular-nums">
+              {% if row.not_started_plans > 0 %}
+                <a href="/browse?project={{ row.project }}&type=plan&type=task&status=not_started"
+                   class="px-2 py-0.5 rounded-full bg-slate-600/30 text-slate-300 hover:bg-slate-600/50 transition">{{ row.not_started_plans }}</a>
+              {% else %}
+                <span class="text-slate-600">—</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-right tabular-nums">
+              {% if row.pending_plans > 0 %}
+                <a href="/browse?project={{ row.project }}&type=plan&type=task&status=pending"
+                   class="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 transition">{{ row.pending_plans }}</a>
+              {% else %}
+                <span class="text-slate-600">—</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-right tabular-nums">
+              {% if row.complete_plans > 0 %}
+                <a href="/browse?project={{ row.project }}&type=plan&type=task&status=complete"
+                   class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 transition">{{ row.complete_plans }}</a>
+              {% else %}
+                <span class="text-slate-600">—</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-right tabular-nums">
+              {% if has_notes %}
+                <a href="/browse?project={{ row.project }}" class="text-slate-300 hover:text-slate-100">{{ row.total_notes }}</a>
+              {% else %}
+                <span class="text-slate-600">0</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-right text-slate-500 text-xs whitespace-nowrap">
+              {{ row.last_activity[:10] if row.last_activity else '—' }}
+            </td>
+            <td class="px-2 py-2 text-right">
+              {% if row.project %}
+              <button type="button" title="hide project"
+                onclick="infoguanaSetProjectHidden('{{ row.project }}', true, this); event.stopPropagation();"
+                class="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-slate-200 transition w-6 h-6 inline-flex items-center justify-center rounded">×</button>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">no projects yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+  function infoguanaToggleHiddenMenu() {
+    document.getElementById('hidden-menu')?.classList.toggle('hidden');
+  }
+  document.addEventListener('click', () => {
+    document.getElementById('hidden-menu')?.classList.add('hidden');
+  });
+  async function infoguanaSetProjectHidden(name, hide, btn) {
+    btn.disabled = true;
+    try {
+      const r = await fetch('/projects/' + encodeURIComponent(name) + '/visibility', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ hidden: hide ? '1' : '0' }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // Cheapest correct UX: reload the page so the table + hidden dropdown
+      // both reflect the new state with their proper sort order.
+      window.location.reload();
+    } catch (e) {
+      btn.disabled = false;
+      alert('could not update visibility: ' + e.message);
+    }
+  }
+</script>
+{% endblock %}

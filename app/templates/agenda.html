@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}agenda · infoguana{% endblock %}
+{% block content %}
+<section class="mb-4">
+  <div class="flex items-center justify-between mb-3">
+    <h1 class="text-xs uppercase tracking-wider text-slate-500">agenda</h1>
+    <span class="text-xs text-slate-500">{{ total }} item{{ '' if total == 1 else 's' }} · {{ today_iso }}</span>
+  </div>
+
+  <form method="get" action="/agenda" id="agenda-form" class="flex flex-col gap-2 text-sm">
+    {# Chip-style multi-select. Each checkbox submits as `project=<value>`
+       so the URL stays `?project=a&project=b` and FastAPI receives a list.
+       Active styling is server-rendered (so toggling re-paints correctly
+       on the next render). Click any chip to add/remove that project from
+       the filter; pick zero to see all projects. #}
+    <div class="flex flex-wrap items-center gap-1 rounded-lg bg-slate-900 border border-slate-800 px-2 py-1.5">
+      <span class="text-xs text-slate-500 px-1">project:</span>
+      {% for p in all_projects %}
+        {% set active = p in project %}
+        <label class="cursor-pointer select-none">
+          <input type="checkbox" name="project" value="{{ p }}"
+            {% if active %}checked{% endif %}
+            class="sr-only"
+            onchange="this.form.submit()">
+          <span class="px-2 py-0.5 rounded-full text-xs transition {% if active %}bg-indigo-500/30 text-indigo-200{% else %}bg-slate-800 text-slate-400 hover:bg-slate-700{% endif %}">{{ p }}</span>
+        </label>
+      {% endfor %}
+    </div>
+
+    <div class="flex flex-wrap gap-2 items-center">
+      <label class="cursor-pointer select-none inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-900 border border-slate-800">
+        <input type="checkbox" name="show_complete" value="true"
+          {% if show_complete %}checked{% endif %}
+          onchange="this.form.submit()"
+          class="accent-indigo-500">
+        <span class="text-xs text-slate-300">show recently complete</span>
+      </label>
+
+      {# Toggle: group items by project within each bucket (default), or
+         flatten and sort purely by due date. Inverted-named so the
+         "unchecked = absent param = default" GET-form quirk lines up:
+         checking sends `flat=true`, unchecking omits it and the route
+         falls back to flat=False (= grouped). #}
+      <label class="cursor-pointer select-none inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-900 border border-slate-800">
+        <input type="checkbox" name="flat" value="true"
+          {% if flat %}checked{% endif %}
+          onchange="this.form.submit()"
+          class="accent-indigo-500">
+        <span class="text-xs text-slate-300">sort by date only</span>
+      </label>
+
+      {% if project or show_complete or flat %}
+        <a href="/agenda" class="text-xs text-slate-500 hover:text-slate-300 px-2 py-1">clear</a>
+      {% endif %}
+    </div>
+  </form>
+</section>
+
+{% set _section_meta = [
+  ('overdue',  'overdue',     'text-rose-300',   'bg-rose-500/30'),
+  ('today',    'today',       'text-rose-300',   'bg-rose-400'),
+  ('soon',     'this week',   'text-amber-300',  'bg-amber-400'),
+  ('later',    'later',       'text-slate-300',  'bg-slate-400'),
+  ('no_date',  'no due date', 'text-sky-300',    'bg-sky-400'),
+  ('complete', 'complete',    'text-emerald-300','bg-emerald-400'),
+] %}
+
+{% if total == 0 %}
+  <p class="text-slate-500 text-sm">nothing scheduled.{% if project %} (try clearing the project filter){% endif %}</p>
+{% endif %}
+
+{% for key, label, label_cls, dot_cls in _section_meta %}
+  {% set groups = sections[key] %}
+  {% set count = namespace(n=0) %}
+  {% for _, items in groups %}{% set count.n = count.n + items|length %}{% endfor %}
+  {% if count.n > 0 %}
+    <section class="mb-6">
+      <div class="flex items-center gap-2 mb-3 sticky top-14 bg-slate-950/90 backdrop-blur py-1 -mx-1 px-1 z-[5]">
+        <span class="w-2 h-2 rounded-full {{ dot_cls }}"></span>
+        <h2 class="text-xs uppercase tracking-wider {{ label_cls }}">{{ label }}</h2>
+        <span class="text-xs text-slate-500">{{ count.n }}</span>
+      </div>
+      {% for proj, items in groups %}
+        <div class="mb-3">
+          {# Sub-header is shown when the group has a real project key.
+             Flat-mode dated buckets use `proj=None` as a synthetic
+             single-group sentinel — those skip the header. The no_date
+             bucket stays grouped even in flat mode (no date to sort on),
+             so it keeps real project keys and renders headers. #}
+          {% if proj is not none %}
+          <div class="flex items-center gap-1.5 mb-1.5 text-xs">
+            {% if proj %}
+              <a href="/agenda?project={{ proj }}{% if show_complete %}&show_complete=true{% endif %}{% if flat %}&flat=true{% endif %}"
+                 class="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25 transition">{{ proj }}</a>
+            {% else %}
+              <span class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-500 italic">no project</span>
+            {% endif %}
+            <span class="text-slate-600">·</span>
+            <span class="text-slate-500">{{ items|length }}</span>
+          </div>
+          {% endif %}
+          <div class="space-y-3">
+            {% for note in items %}
+              {% include "_note_card.html" with context %}
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    </section>
+  {% endif %}
+{% endfor %}
+
+{% endblock %}

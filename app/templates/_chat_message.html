@@ -1,0 +1,108 @@
+{# expects `m` — a Message #}
+<div class="chat-msg group flex gap-3 py-3 {% if m.role == 'user' %}justify-end{% endif %}"
+     data-message-id="{{ m.id }}"
+     {% if m.role == 'assistant' and m.run_status == 'running' %}data-run-status="running"{% endif %}>
+  {% if m.role == 'user' %}
+    <div class="relative max-w-[80%]">
+      {% if m.attachments %}
+      <div class="msg-attachments flex flex-wrap gap-2 mb-1 justify-end">
+        {% for a in m.attachments %}
+          {% set fname = a.path.rsplit('/', 1)[-1] %}
+          {% set url = '/chat-attachments/' ~ a.message_id ~ '/' ~ fname %}
+          {% if a.mime_type and a.mime_type.startswith('image/') %}
+          <a href="{{ url }}" target="_blank" rel="noopener"
+             class="block rounded-lg overflow-hidden border border-indigo-500/30 bg-slate-900">
+            <img src="{{ url }}" alt="{{ a.original_name or fname }}"
+                 class="block max-w-[240px] max-h-[240px] object-contain"
+                 loading="lazy" />
+          </a>
+          {% else %}
+          <a href="{{ url }}" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-2 rounded-lg border border-indigo-500/30 bg-slate-900 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 opacity-70"><path fill-rule="evenodd" d="M4 2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.414a2 2 0 0 0-.586-1.414l-4.414-4.414A2 2 0 0 0 11.586 2H4Zm7 1.414L15.586 8H13a2 2 0 0 1-2-2V3.414Z" clip-rule="evenodd"/></svg>
+            <span class="truncate max-w-[160px]">{{ a.original_name or fname }}</span>
+          </a>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if m.content %}
+      <div class="bg-indigo-500/20 border border-indigo-500/30 text-slate-100 rounded-2xl rounded-br-sm px-4 py-2 whitespace-pre-wrap text-sm">{{ m.content }}</div>
+      {% endif %}
+      <div class="msg-actions absolute -top-2 -right-1 flex gap-0.5 opacity-30 hover:opacity-100 group-hover:opacity-100 transition-opacity">
+        <button type="button" title="fork from here"
+          onclick="chatFork({{ m.id }})"
+          class="w-7 h-7 rounded-full bg-slate-900 border border-slate-700 text-slate-400 hover:text-indigo-300 hover:bg-slate-800 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M5 4a2 2 0 1 1 1 1.732V8a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V5.732A2 2 0 1 1 15 4 2 2 0 0 1 14 5.732V8a4 4 0 0 1-4 4h-.5v2.268a2 2 0 1 1-1 0V12H8a4 4 0 0 1-4-4V5.732A2 2 0 0 1 5 4Zm5 12a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z" clip-rule="evenodd"/></svg>
+        </button>
+        <button type="button" title="edit &amp; restart from here"
+          onclick="chatEdit({{ m.id }})"
+          class="w-7 h-7 rounded-full bg-slate-900 border border-slate-700 text-slate-400 hover:text-indigo-300 hover:bg-slate-800 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path d="M2.695 14.762l-1.262 3.155a.5.5 0 0 0 .65.65l3.155-1.262a4 4 0 0 0 1.343-.886L17.5 5.5a2.121 2.121 0 0 0-3-3L3.58 13.42a4 4 0 0 0-.885 1.343Z"/></svg>
+        </button>
+        <button type="button" title="delete this message"
+          onclick="chatDelete({{ m.id }}, this)"
+          class="w-7 h-7 rounded-full bg-slate-900 border border-slate-700 text-slate-400 hover:text-red-400 hover:bg-slate-800 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75V5h-1.25a.75.75 0 0 0 0 1.5h.29l.737 10.562A2.25 2.25 0 0 0 8.022 19.25h3.956a2.25 2.25 0 0 0 2.245-2.188L14.96 6.5h.29a.75.75 0 0 0 0-1.5H14V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 3a1.25 1.25 0 0 1 1.25 1.25V5h-2.5V4.25A1.25 1.25 0 0 1 10 3ZM8.5 8.75a.75.75 0 0 1 1.5 0v6a.75.75 0 0 1-1.5 0v-6ZM11.75 8a.75.75 0 0 0-.75.75v6a.75.75 0 0 0 1.5 0v-6a.75.75 0 0 0-.75-.75Z" clip-rule="evenodd"/></svg>
+        </button>
+      </div>
+    </div>
+  {% else %}
+    <div class="relative max-w-[80%] space-y-2 flex flex-col">
+      <div class="msg-actions absolute -top-2 -right-1 flex gap-0.5 opacity-30 hover:opacity-100 group-hover:opacity-100 transition-opacity z-10">
+        <button type="button" title="fork from here"
+          onclick="chatFork({{ m.id }})"
+          class="w-7 h-7 rounded-full bg-slate-900 border border-slate-700 text-slate-400 hover:text-indigo-300 hover:bg-slate-800 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M5 4a2 2 0 1 1 1 1.732V8a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V5.732A2 2 0 1 1 15 4 2 2 0 0 1 14 5.732V8a4 4 0 0 1-4 4h-.5v2.268a2 2 0 1 1-1 0V12H8a4 4 0 0 1-4-4V5.732A2 2 0 0 1 5 4Zm5 12a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z" clip-rule="evenodd"/></svg>
+        </button>
+        <button type="button" title="delete this message"
+          onclick="chatDelete({{ m.id }}, this)"
+          class="w-7 h-7 rounded-full bg-slate-900 border border-slate-700 text-slate-400 hover:text-red-400 hover:bg-slate-800 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75V5h-1.25a.75.75 0 0 0 0 1.5h.29l.737 10.562A2.25 2.25 0 0 0 8.022 19.25h3.956a2.25 2.25 0 0 0 2.245-2.188L14.96 6.5h.29a.75.75 0 0 0 0-1.5H14V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 3a1.25 1.25 0 0 1 1.25 1.25V5h-2.5V4.25A1.25 1.25 0 0 1 10 3ZM8.5 8.75a.75.75 0 0 1 1.5 0v6a.75.75 0 0 1-1.5 0v-6ZM11.75 8a.75.75 0 0 0-.75.75v6a.75.75 0 0 0 1.5 0v-6a.75.75 0 0 0-.75-.75Z" clip-rule="evenodd"/></svg>
+        </button>
+      </div>
+      {% if m.run_status == 'running' %}
+        {# Streaming shell — JS attachStream() will populate pills/text from the
+           SSE event log for this message id. #}
+        <div class="pills flex flex-wrap gap-1.5 hidden"></div>
+        <div class="assistant-text bg-slate-800/60 border border-slate-700/60 text-slate-100 rounded-2xl rounded-bl-sm px-4 py-2 whitespace-pre-wrap text-sm">
+          <span class="pending inline-flex items-center gap-1.5 text-slate-400">
+            <svg class="w-3.5 h-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-25"/><path fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"/></svg>
+            <span>resuming…</span>
+          </span><span class="text"></span>
+        </div>
+      {% else %}
+        {% if m.tool_calls %}
+          <div class="flex flex-wrap gap-1.5">
+            {% for tc in m.tool_calls %}
+            <details class="group inline-block text-xs">
+              <summary class="cursor-pointer list-none inline-flex items-center gap-1 rounded-full bg-slate-800/50 hover:bg-slate-800 border border-slate-700 text-slate-400 px-2.5 py-1 select-none">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 opacity-70"><path d="M11.983 1.907a.75.75 0 0 0-1.292-.657l-8.5 9.5A.75.75 0 0 0 2.75 12h6.572l-1.305 6.093a.75.75 0 0 0 1.292.657l8.5-9.5A.75.75 0 0 0 17.25 8h-6.572l1.305-6.093Z"/></svg>
+                <span class="font-mono">{{ tc.name }}</span>
+                <span class="text-slate-500 group-open:hidden">›</span>
+                <span class="text-slate-500 hidden group-open:inline">⌃</span>
+              </summary>
+              <div class="mt-2 rounded-lg bg-slate-900/80 border border-slate-800 p-3 font-mono text-[11px] leading-relaxed text-slate-300 max-w-full overflow-x-auto">
+                <div class="text-slate-500 mb-1">args</div>
+                <pre class="whitespace-pre-wrap break-words">{{ tc.args | tojson(indent=2) }}</pre>
+                {% if tc.result %}
+                <div class="text-slate-500 mt-3 mb-1">result</div>
+                <pre class="whitespace-pre-wrap break-words">{{ tc.result }}</pre>
+                {% endif %}
+              </div>
+            </details>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if m.content %}
+        <div class="markdown-body bg-slate-800/60 border border-slate-700/60 text-slate-100 rounded-2xl rounded-bl-sm px-4 py-2 text-sm">{{ m.content | markdown }}</div>
+        {% endif %}
+        {% if m.run_status == 'interrupted' %}
+        <div class="text-xs text-amber-400/80 italic">(run was interrupted)</div>
+        {% elif m.run_status == 'error' %}
+        <div class="text-xs text-red-400/80 italic">(run errored)</div>
+        {% endif %}
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

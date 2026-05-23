@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+<script>
+  window.__infoguanaFiles = [];
+
+  function infoguanaAddFiles(input) {
+    for (const f of input.files) {
+      // de-dupe by name+size to tolerate re-picking the same files
+      if (!window.__infoguanaFiles.some(x => x.name === f.name && x.size === f.size)) {
+        window.__infoguanaFiles.push(f);
+      }
+    }
+    input.value = '';          // allow picking the same file again later
+    infoguanaRebuildPreview();
+  }
+
+  function infoguanaRemoveFile(idx) {
+    window.__infoguanaFiles.splice(idx, 1);
+    infoguanaRebuildPreview();
+  }
+
+  function infoguanaResetFiles() {
+    window.__infoguanaFiles = [];
+    infoguanaRebuildPreview();
+  }
+
+  function infoguanaRebuildPreview() {
+    const p = document.getElementById('preview');
+    p.innerHTML = '';
+    const input = document.querySelector('input[name="image"]');
+    const dt = new DataTransfer();
+
+    window.__infoguanaFiles.forEach((f, idx) => {
+      dt.items.add(f);
+      const wrap = document.createElement('div');
+      wrap.className = 'relative group';
+
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(f);
+      img.className = 'h-24 w-24 object-cover rounded-lg border border-slate-700 cursor-zoom-in';
+      img.addEventListener('click', () => infoguanaLightbox(img.src));
+
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.setAttribute('aria-label', 'remove');
+      rm.textContent = '×';
+      rm.className = 'absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-slate-950 border border-slate-600 text-slate-300 hover:bg-red-500 hover:text-white hover:border-red-500 text-base leading-none flex items-center justify-center shadow';
+      rm.addEventListener('click', (e) => { e.stopPropagation(); infoguanaRemoveFile(idx); });
+
+      wrap.appendChild(img);
+      wrap.appendChild(rm);
+      p.appendChild(wrap);
+    });
+
+    input.files = dt.files;
+  }
+</script>
+
+<section class="mb-8">
+  <form
+    hx-post="/notes/form"
+    hx-encoding="multipart/form-data"
+    hx-target="#feed"
+    hx-swap="afterbegin"
+    hx-on::after-request="if(event.detail.successful){ this.reset(); infoguanaResetFiles(); this.querySelector('textarea').focus(); }"
+    class="space-y-2"
+  >
+    <textarea
+      name="content"
+      rows="4"
+      placeholder="capture a fact + the how, e.g. 'GitHub REST rate-limits at 5000/hr — read X-RateLimit-Remaining + back off exponentially from Retry-After on 429'"
+      autofocus
+      class="w-full rounded-xl bg-slate-900 border border-slate-800 focus:border-slate-600 focus:outline-none px-4 py-3 text-base resize-none placeholder:text-slate-500"
+    ></textarea>
+
+    <div id="preview" class="flex flex-wrap gap-3"></div>
+
+    <div class="flex gap-2 items-center">
+      <input
+        name="project"
+        placeholder="project (optional)"
+        class="flex-1 rounded-lg bg-slate-900 border border-slate-800 focus:border-slate-600 focus:outline-none px-3 py-2 text-sm placeholder:text-slate-500"
+      >
+      <label
+        class="rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 font-medium px-3 py-2 text-sm transition cursor-pointer inline-flex items-center gap-1"
+        title="attach image"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+          <path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 0 1 3.25 3h13.5A2.25 2.25 0 0 1 19 5.25v9.5A2.25 2.25 0 0 1 16.75 17H3.25A2.25 2.25 0 0 1 1 14.75v-9.5Zm1.5 5.81v3.69c0 .414.336.75.75.75h13.5a.75.75 0 0 0 .75-.75v-2.69l-2.22-2.22a.75.75 0 0 0-1.06 0l-1.91 1.91-3.41-3.41a.75.75 0 0 0-1.06 0L2.5 11.06ZM6.25 7.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z" clip-rule="evenodd" />
+        </svg>
+        <span class="hidden sm:inline">image</span>
+        <input
+          type="file"
+          name="image"
+          accept="image/*"
+          multiple
+          class="hidden"
+          onchange="infoguanaAddFiles(this)"
+        >
+      </label>
+      <button
+        type="submit"
+        class="rounded-lg bg-indigo-500 hover:bg-indigo-400 active:bg-indigo-600 text-white font-medium px-4 py-2 text-sm transition"
+      >capture</button>
+    </div>
+  </form>
+</section>
+
+<section>
+  <h2 class="text-xs uppercase tracking-wider text-slate-500 mb-3">recent</h2>
+  <div id="feed" class="space-y-3">
+    {% for note in notes %}
+      {% include "_note_card.html" %}
+    {% else %}
+      <p class="text-slate-500 text-sm">no notes yet. drop something above.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

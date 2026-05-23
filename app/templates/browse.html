@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}browse · infoguana{% endblock %}
+{% block content %}
+{% if single_id %}
+<section class="mb-6 flex items-center gap-2 text-sm">
+  <span class="text-slate-400">viewing <span class="font-mono">#{{ single_id }}</span></span>
+  {# history.back() returns to the prior filtered browse, search query,
+     or capture view — wherever the user clicked the chip from. Falls back
+     to /browse if there's no history (e.g. opened from a bookmark). #}
+  <a href="/browse"
+     onclick="if (history.length > 1) { event.preventDefault(); history.back(); }"
+     class="text-indigo-400 hover:text-indigo-300">← back</a>
+</section>
+{% else %}
+<section class="mb-6">
+  {# Form submits via GET so the URL stays bookmarkable. The search
+     input is also HTMX-driven so typing live-updates the result list
+     without losing focus or the filter selects. hx-target / hx-select
+     swap just the cards section out of the full /browse response. #}
+  {# Two rows: a full-width search input on top, filter selects +
+     result count below. Form submits via GET so the URL stays
+     bookmarkable; the search input is also HTMX-driven so typing
+     live-updates the result list without losing focus or filters. #}
+  <form method="get" action="/browse" id="browse-form"
+        class="flex flex-col gap-2">
+    <input
+      type="search"
+      name="q"
+      value="{{ q or '' }}"
+      placeholder="search within filters"
+      hx-get="/browse"
+      hx-trigger="input changed delay:200ms, keyup[key=='Enter']"
+      hx-include="#browse-form"
+      hx-target="#browse-results"
+      hx-select="#browse-results"
+      hx-swap="outerHTML"
+      hx-push-url="true"
+      class="w-full rounded-lg bg-slate-900 border border-slate-800 focus:border-slate-600 focus:outline-none px-3 py-2 text-sm placeholder:text-slate-500 text-slate-100"
+    >
+
+    <div class="flex flex-wrap gap-2 items-center">
+      <select name="project"
+        class="rounded-lg bg-slate-900 border border-slate-800 focus:border-slate-600 focus:outline-none px-3 py-2 text-sm text-slate-100"
+        onchange="this.form.submit()">
+        <option value="">any project</option>
+        {% for p in all_projects %}
+          <option value="{{ p }}" {% if p == project %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+
+      {# Chip-style multi-select. Each checkbox submits as `type=<value>`,
+         so the URL stays `?type=plan&type=task` and FastAPI receives a list.
+         Active styling is server-rendered (Jinja conditional) instead of
+         relying on Tailwind's `peer-checked` variant — the CDN-runtime JIT
+         doesn't always pick that up, and the form auto-submits on toggle so
+         the next render carries the new active state. #}
+      <div class="flex flex-wrap items-center gap-1 rounded-lg bg-slate-900 border border-slate-800 px-2 py-1 text-sm">
+        <span class="text-xs text-slate-500 px-1">type:</span>
+        {% for t in all_types %}
+          {% set active = t in type %}
+          <label class="cursor-pointer select-none">
+            <input type="checkbox" name="type" value="{{ t }}"
+              {% if active %}checked{% endif %}
+              class="sr-only"
+              onchange="this.form.submit()">
+            <span class="px-2 py-0.5 rounded-full text-xs transition {% if active %}bg-indigo-500/30 text-indigo-200{% else %}bg-slate-800 text-slate-400 hover:bg-slate-700{% endif %}">{{ t }}</span>
+          </label>
+        {% endfor %}
+      </div>
+
+      <select name="status"
+        class="rounded-lg bg-slate-900 border border-slate-800 focus:border-slate-600 focus:outline-none px-3 py-2 text-sm text-slate-100"
+        onchange="this.form.submit()">
+        <option value="">any status</option>
+        <option value="not_started" {% if status == 'not_started' %}selected{% endif %}>not started</option>
+        <option value="pending" {% if status == 'pending' %}selected{% endif %}>in progress</option>
+        <option value="complete" {% if status == 'complete' %}selected{% endif %}>complete</option>
+      </select>
+
+      {% if tag %}
+        {# Hidden field so the tag filter survives changes to the project /
+           type / status selects (which submit the form on change). The
+           visible chip lets the user see and clear the active tag. #}
+        <input type="hidden" name="tag" value="{{ tag }}">
+        <span class="inline-flex items-center gap-1 rounded-full bg-slate-800 border border-slate-700 px-2 py-0.5 text-xs text-slate-200">
+          #{{ tag }}
+          <a href="?{% if project %}project={{ project }}&{% endif %}{% for t in type %}type={{ t }}&{% endfor %}{% if status %}status={{ status }}&{% endif %}{% if q %}q={{ q }}{% endif %}"
+             class="text-slate-500 hover:text-slate-200" title="remove tag filter">×</a>
+        </span>
+      {% endif %}
+
+      {% if project or type or status or tag or q %}
+        <a href="/browse" class="text-xs text-slate-500 hover:text-slate-300 px-2 py-1">clear</a>
+      {% endif %}
+
+      <span class="ml-auto text-xs text-slate-500">{{ notes|length }} result{{ '' if notes|length == 1 else 's' }}{% if notes|length >= limit %} (capped at {{ limit }}){% endif %}</span>
+    </div>
+  </form>
+</section>
+{% endif %}
+
+<section id="browse-results">
+  <div class="space-y-3">
+    {% for note in notes %}
+      {% include "_note_card.html" %}
+    {% else %}
+      {% if not tombstones %}
+        <p class="text-slate-500 text-sm">{% if single_id %}no note with id {{ single_id }}.{% elif q %}no matches for "{{ q }}" in this slice.{% else %}no notes match these filters.{% endif %}</p>
+      {% endif %}
+    {% endfor %}
+
+    {% if tombstones %}
+      <div class="pt-4 mt-4 border-t border-slate-800 flex items-center gap-2 text-xs text-slate-500">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+          <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75V5h-1.25a.75.75 0 0 0 0 1.5h.29l.737 10.562A2.25 2.25 0 0 0 8.022 19.25h3.956a2.25 2.25 0 0 0 2.245-2.188L14.96 6.5h.29a.75.75 0 0 0 0-1.5H14V3.75A2.75 2.75 0 0 0 11.25 1h-2.5Z" clip-rule="evenodd"/>
+        </svg>
+        <span>{{ tombstones | length }} deleted note{{ '' if tombstones|length == 1 else 's' }} matched</span>
+      </div>
+      {% for note in tombstones %}
+        {% include "_note_card.html" %}
+      {% endfor %}
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

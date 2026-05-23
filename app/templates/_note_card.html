@@ -1,0 +1,440 @@
+<article
+  id="note-{{ note.id }}"
+  data-note-id="{{ note.id }}"
+  data-note-type="{{ note.type }}"
+  data-mode="view"
+  {% if collapsed %}data-collapsed="1"{% endif %}
+  {% if note.tombstoned %}data-tombstoned="1"{% endif %}
+  class="note-card rounded-xl {% if note.tombstoned %}bg-slate-900/40 border-rose-900/40 opacity-75{% else %}bg-slate-900 border-slate-800{% endif %} border overflow-hidden relative transition"
+  {% if note.type == 'unsorted' and not note.tombstoned %}
+  hx-get="/notes/{{ note.id }}/card{% if collapsed %}?collapsed=1{% endif %}"
+  hx-trigger="load delay:1500ms"
+  hx-target="this"
+  hx-swap="outerHTML"
+  {% endif %}
+>
+  <div class="card-view px-4 py-3">
+    <div class="absolute top-1.5 right-1.5 flex gap-0.5">
+      {# "view in graph" — hidden when the card is rendered inside the
+         graph side panel itself (context='graph'), where it would just
+         reload the page. Also hidden for tombstones (node is gone). #}
+      {% if context != 'graph' and not note.tombstoned %}
+      <a
+        href="/graph?focus={{ note.id }}"
+        title="view in graph"
+        aria-label="view in graph"
+        onclick="event.stopPropagation();"
+        class="w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:text-pink-300 hover:bg-slate-800 active:bg-slate-700 transition"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+          <circle cx="4" cy="6" r="2"/>
+          <circle cx="16" cy="5" r="2"/>
+          <circle cx="10" cy="15" r="2.25"/>
+          <path stroke="currentColor" stroke-width="1.2" fill="none" d="M5 7l4 7M15 7l-4 7"/>
+        </svg>
+      </a>
+      {% endif %}
+      {% if (note.version and note.version > 1) or note.tombstoned %}
+      <button
+        type="button"
+        title="revision history"
+        aria-label="history"
+        onclick="infoguanaShowHistory({{ note.id }}); event.stopPropagation();"
+        class="w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:text-sky-300 hover:bg-slate-800 active:bg-slate-700 transition"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+          <path fill-rule="evenodd" d="M10 18a8 8 0 1 0-8-8h1.5a6.5 6.5 0 1 1 1.905 4.595L7 13H2v5l1.5-1.5A8 8 0 0 0 10 18Zm.75-13a.75.75 0 0 0-1.5 0v5c0 .2.08.39.22.53l3 3a.75.75 0 1 0 1.06-1.06l-2.78-2.78V5Z" clip-rule="evenodd"/>
+        </svg>
+      </button>
+      {% endif %}
+      {% if note.type in ('plan', 'feature') and not note.tombstoned %}
+      <button
+        type="button"
+        title="export design history (synthesized doc)"
+        aria-label="export"
+        onclick="infoguanaExport({{ note.id }}, this); event.stopPropagation();"
+        class="w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:text-amber-300 hover:bg-slate-800 active:bg-slate-700 transition"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+          <path fill-rule="evenodd" d="M10 1a.75.75 0 0 1 .75.75v8.69l2.97-2.97a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.53a.75.75 0 0 1 1.06-1.06l2.97 2.97V1.75A.75.75 0 0 1 10 1Zm-7 13.25a.75.75 0 0 1 .75.75v1.25c0 .414.336.75.75.75h11a.75.75 0 0 0 .75-.75V15a.75.75 0 0 1 1.5 0v1.25A2.25 2.25 0 0 1 15.5 18.5h-11A2.25 2.25 0 0 1 2.25 16.25V15a.75.75 0 0 1 .75-.75Z" clip-rule="evenodd"/>
+        </svg>
+      </button>
+      {% endif %}
+      {% if not note.tombstoned %}
+      <button
+        type="button"
+        title="edit"
+        aria-label="edit"
+        onclick="infoguanaSetMode({{ note.id }}, 'edit'); event.stopPropagation();"
+        class="w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:text-indigo-300 hover:bg-slate-800 active:bg-slate-700 transition"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+          <path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/>
+        </svg>
+      </button>
+      <button
+        type="button"
+        title="delete"
+        aria-label="delete"
+        onclick="infoguanaSetMode({{ note.id }}, 'confirm-delete'); event.stopPropagation();"
+        class="w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-800 active:bg-slate-700 transition"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+          <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75V5h-1.25a.75.75 0 0 0 0 1.5h.29l.737 10.562A2.25 2.25 0 0 0 8.022 19.25h3.956a2.25 2.25 0 0 0 2.245-2.188L14.96 6.5h.29a.75.75 0 0 0 0-1.5H14V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 3a1.25 1.25 0 0 1 1.25 1.25V5h-2.5V4.25A1.25 1.25 0 0 1 10 3ZM8.5 8.75a.75.75 0 0 1 1.5 0v6a.75.75 0 0 1-1.5 0v-6ZM11.75 8a.75.75 0 0 0-.75.75v6a.75.75 0 0 0 1.5 0v-6a.75.75 0 0 0-.75-.75Z" clip-rule="evenodd"/>
+        </svg>
+      </button>
+      {% endif %}
+    </div>
+
+    {# Padding-right reserves room for the absolute-positioned action
+       buttons (40px each). Counts: edit + delete are always present;
+       export is plan-only; view-in-graph is suppressed in graph context;
+       history is shown for revised notes (version > 1) or tombstones.
+       Tombstones drop edit/delete/view-in-graph and only keep history. #}
+    {% if note.tombstoned %}
+      {% set _btn_count = 1 %}
+    {% else %}
+      {% set _btn_count = 2
+          + (1 if note.type in ('plan', 'feature') else 0)
+          + (0 if context == 'graph' else 1)
+          + (1 if note.version and note.version > 1 else 0) %}
+    {% endif %}
+    {% set _pr = {1: 'pr-12', 2: 'pr-20', 3: 'pr-32', 4: 'pr-40', 5: 'pr-52'}[_btn_count] %}
+    <div class="flex items-start justify-between gap-3 mb-1 min-h-10 {{ _pr }}">
+      <div class="flex items-center gap-2 flex-wrap text-xs">
+        <span class="text-slate-500 font-mono select-all" title="note id">#{{ note.id }}</span>
+        {% if note.tombstoned %}
+          <span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 inline-flex items-center gap-1"
+                title="note has been deleted; this is the final snapshot">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3">
+              <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75V5h-1.25a.75.75 0 0 0 0 1.5h.29l.737 10.562A2.25 2.25 0 0 0 8.022 19.25h3.956a2.25 2.25 0 0 0 2.245-2.188L14.96 6.5h.29a.75.75 0 0 0 0-1.5H14V3.75A2.75 2.75 0 0 0 11.25 1h-2.5Z" clip-rule="evenodd"/>
+            </svg>
+            deleted
+          </span>
+          <span class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">{{ note.type }}</span>
+        {% elif note.type == 'unsorted' %}
+          <span class="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 inline-flex items-center gap-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+            classifying
+          </span>
+        {% elif note.type in ('plan', 'task') %}
+          {# Clickable status chip — opens a 3-option popover for manual state changes. #}
+          <div class="relative inline-block">
+            {% if note.status == 'complete' %}
+              {% set chip_classes = 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' %}
+              {% set dot_class = 'bg-emerald-400' %}
+              {% set label = note.type ~ ' · complete' %}
+            {% elif note.status == 'pending' %}
+              {% set chip_classes = 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30' %}
+              {% set dot_class = 'bg-sky-400' %}
+              {% set label = note.type ~ ' · in progress' %}
+            {% else %}
+              {% set chip_classes = 'bg-slate-700/60 text-slate-300 hover:bg-slate-700' %}
+              {% set dot_class = 'bg-slate-400' %}
+              {% set label = note.type ~ ' · not started' %}
+            {% endif %}
+            <button
+              type="button"
+              onclick="infoguanaToggleStatus({{ note.id }}); event.stopPropagation();"
+              class="px-2 py-0.5 rounded-full inline-flex items-center gap-1 transition {{ chip_classes }}"
+              title="change status"
+            >
+              <span class="w-1.5 h-1.5 rounded-full {{ dot_class }}"></span>
+              {{ label }}
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 opacity-70">
+                <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"/>
+              </svg>
+            </button>
+            <div
+              id="status-popover-{{ note.id }}"
+              class="hidden absolute z-20 mt-1 left-0 min-w-[10rem] rounded-lg bg-slate-900 border border-slate-700 shadow-lg overflow-hidden text-sm"
+            >
+              <button type="button" onclick="infoguanaSetStatus({{ note.id }}, 'not_started', this); event.stopPropagation();"
+                class="w-full text-left px-3 py-1.5 hover:bg-slate-800 flex items-center gap-2 {% if note.status == 'not_started' %}text-slate-400{% else %}text-slate-200{% endif %}">
+                <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>not started
+                {% if note.status == 'not_started' %}<span class="ml-auto text-xs">✓</span>{% endif %}
+              </button>
+              <button type="button" onclick="infoguanaSetStatus({{ note.id }}, 'pending', this); event.stopPropagation();"
+                class="w-full text-left px-3 py-1.5 hover:bg-slate-800 flex items-center gap-2 {% if note.status == 'pending' %}text-slate-400{% else %}text-slate-200{% endif %}">
+                <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span>in progress
+                {% if note.status == 'pending' %}<span class="ml-auto text-xs">✓</span>{% endif %}
+              </button>
+              <button type="button" onclick="infoguanaShipPlan({{ note.id }}, this); event.stopPropagation();"
+                class="w-full text-left px-3 py-1.5 hover:bg-slate-800 flex items-center gap-2 border-t border-slate-800 {% if note.status == 'complete' %}text-slate-400{% else %}text-slate-200{% endif %}">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>complete
+                {% if note.status == 'complete' %}
+                  <span class="ml-auto text-xs">✓</span>
+                {% else %}
+                  <span class="ml-auto text-xs text-slate-500">via chat</span>
+                {% endif %}
+              </button>
+            </div>
+          </div>
+          {# Plan #279: graduate button surfaces on completed plans that haven't
+             already been graduated (no outgoing implements→feature edge). One
+             click spawns a synthesis chat that drafts a feature note bundling
+             the plan + its PRs + lessons-learned. #}
+          {# Due-date chip (plans/tasks only). Color thresholds:
+             - overdue or today: red
+             - within 7 days: amber
+             - >7 days out: neutral slate
+             - none set: dim "+ due" affordance
+             Click opens an inline date editor (popover) with date input,
+             clear button, and save. Hidden on completed plans/tasks since
+             a due date is no longer load-bearing once shipped. #}
+          {% if note.status != 'complete' %}
+            {% set _due = note.due_date | due_display %}
+            {% if _due %}
+              {% if _due.bucket in ('overdue', 'today') %}
+                {% set _due_classes = 'bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 border-rose-500/30' %}
+              {% elif _due.bucket == 'soon' %}
+                {% set _due_classes = 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border-amber-500/30' %}
+              {% else %}
+                {% set _due_classes = 'bg-slate-700/40 text-slate-300 hover:bg-slate-700/70 border-slate-600/40' %}
+              {% endif %}
+            {% else %}
+              {% set _due_classes = 'bg-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800 border-slate-700/40 border-dashed' %}
+            {% endif %}
+            <div class="relative inline-block">
+              <button
+                type="button"
+                onclick="infoguanaToggleDueEditor({{ note.id }}); event.stopPropagation();"
+                class="px-2 py-0.5 rounded-full inline-flex items-center gap-1 transition border {{ _due_classes }}"
+                title="{% if _due %}due {{ note.due_date }}{% else %}set a due date{% endif %}"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 opacity-80">
+                  <path fill-rule="evenodd" d="M5.75 2a.75.75 0 0 1 .75.75V4h7V2.75a.75.75 0 0 1 1.5 0V4h.25A2.75 2.75 0 0 1 18 6.75v8.5A2.75 2.75 0 0 1 15.25 18H4.75A2.75 2.75 0 0 1 2 15.25v-8.5A2.75 2.75 0 0 1 4.75 4H5V2.75A.75.75 0 0 1 5.75 2Zm-1 5.25a.25.25 0 0 0-.25.25v7.75c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25V7.5a.25.25 0 0 0-.25-.25H4.75Z" clip-rule="evenodd"/>
+                </svg>
+                {% if _due %}{{ _due.label }}{% else %}+ due{% endif %}
+              </button>
+              <form
+                id="due-editor-{{ note.id }}"
+                class="hidden absolute z-20 mt-1 left-0 min-w-[14rem] rounded-lg bg-slate-900 border border-slate-700 shadow-lg overflow-hidden text-sm p-2 space-y-2"
+                onsubmit="infoguanaSubmitDue(event, {{ note.id }}); return false;"
+                onclick="event.stopPropagation();"
+              >
+                <input
+                  type="date"
+                  name="due_date"
+                  value="{{ note.due_date or '' }}"
+                  class="w-full rounded-md bg-slate-950 border border-slate-700 focus:border-slate-500 focus:outline-none px-2 py-1 text-sm text-slate-100"
+                >
+                <div class="flex gap-2 justify-end items-center">
+                  {% if note.due_date %}
+                  <button type="button"
+                    onclick="infoguanaClearDue({{ note.id }}, this); event.stopPropagation();"
+                    class="px-2 py-1 text-xs text-rose-300 hover:bg-slate-800 rounded">clear</button>
+                  {% endif %}
+                  <button type="button"
+                    onclick="infoguanaToggleDueEditor({{ note.id }}); event.stopPropagation();"
+                    class="px-2 py-1 text-xs text-slate-400 hover:bg-slate-800 rounded">cancel</button>
+                  <button type="submit"
+                    class="px-2 py-1 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-400 rounded">save</button>
+                </div>
+              </form>
+            </div>
+          {% endif %}
+          {% if note.type == 'plan' and note.status == 'complete' %}
+            {% set _graduated = note.links
+                  | selectattr('direction', 'equalto', 'out')
+                  | selectattr('edge_type', 'equalto', 'implements')
+                  | selectattr('target_type', 'equalto', 'feature')
+                  | list | length > 0 %}
+            {% if not _graduated %}
+              <button
+                type="button"
+                onclick="infoguanaGraduate({{ note.id }}, this); event.stopPropagation();"
+                title="graduate to a feature note (synthesis chat)"
+                class="px-2 py-0.5 rounded-full inline-flex items-center gap-1 transition bg-purple-500/20 text-purple-300 hover:bg-purple-500/30"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3">
+                  <path d="M10 2a.75.75 0 0 1 .67.41l1.49 2.99 3.31.48a.75.75 0 0 1 .42 1.28l-2.4 2.34.57 3.3a.75.75 0 0 1-1.09.79L10 12.05l-2.97 1.55a.75.75 0 0 1-1.09-.79l.57-3.3-2.4-2.34a.75.75 0 0 1 .42-1.28l3.31-.48 1.49-2.99A.75.75 0 0 1 10 2Z"/>
+                </svg>
+                graduate
+              </button>
+            {% endif %}
+          {% endif %}
+        {% elif note.type == 'rule' %}
+          {# Rules are repo-specific standing constraints — pinned to the
+             top of context. Distinct rose treatment so they read
+             differently from feedback/memory chips. #}
+          <span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 inline-flex items-center gap-1"
+                title="repo-specific rule — pinned in context">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3">
+              <path fill-rule="evenodd" d="M10 1.5a.75.75 0 0 1 .75.75V3h4.25A2.75 2.75 0 0 1 17.75 5.75v8.5A2.75 2.75 0 0 1 15 17H5a2.75 2.75 0 0 1-2.75-2.75v-8.5A2.75 2.75 0 0 1 5 3h4.25v-.75A.75.75 0 0 1 10 1.5ZM5.75 7.25a.75.75 0 0 0 0 1.5h8.5a.75.75 0 0 0 0-1.5h-8.5Zm0 3a.75.75 0 0 0 0 1.5h8.5a.75.75 0 0 0 0-1.5h-8.5Zm0 3a.75.75 0 0 0 0 1.5h5a.75.75 0 0 0 0-1.5h-5Z" clip-rule="evenodd"/>
+            </svg>
+            rule
+          </span>
+        {% else %}
+          <span class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{{ note.type }}</span>
+        {% endif %}
+        {% if note.project %}<span class="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300">{{ note.project }}</span>{% endif %}
+        {% for tag in note.tags %}<span class="text-slate-500 hover:text-slate-300 transition cursor-pointer" data-graph-tag="{{ tag }}">#{{ tag }}</span>{% endfor %}
+      </div>
+      <time class="text-xs text-slate-500 shrink-0" title="{% if note.tombstoned %}deleted at{% else %}created at{% endif %} {{ note.created_at.isoformat() }}">{% if note.tombstoned %}deleted {% endif %}{{ note.created_at.strftime('%b %d %H:%M') }}</time>
+    </div>
+
+    {% if note.content %}
+      {% if collapsed %}
+        {# /browse list view collapses card bodies to the haiku-generated
+           preview (plan #322). When a note hasn't been backfilled yet, fall
+           back to a first-line truncation — same fallback the MCP search
+           tool uses, so the GUI and the agent stay consistent. State is
+           per-card and resets on next render, which is fine since this is
+           a transient list view. #}
+        {% set _summary = note.preview or (note.content | preview_fallback) %}
+        <details class="mb-2 group">
+          <summary class="cursor-pointer text-slate-200 text-sm whitespace-pre-wrap break-words list-none flex items-start gap-1.5">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
+                 class="w-3 h-3 mt-1 shrink-0 text-slate-500 transition-transform group-open:rotate-90">
+              <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L10.94 10 7.23 6.29a.75.75 0 1 1 1.06-1.06l4.25 4.24a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-.02Z" clip-rule="evenodd"/>
+            </svg>
+            <span>{{ _summary }}</span>
+          </summary>
+          <div class="markdown-body text-slate-200 text-sm break-words mt-2 pl-4 border-l border-slate-800">{{ note.content | markdown }}</div>
+        </details>
+      {% else %}
+        <div class="markdown-body text-slate-200 text-sm break-words mb-2">{{ note.content | markdown }}</div>
+      {% endif %}
+    {% endif %}
+
+    {% if note.attachments %}
+      <div class="flex flex-wrap gap-2 mb-2">
+        {% for att in note.attachments %}
+          {% if att.mime_type and att.mime_type.startswith('image/') %}
+            {% set src = "/notes/" ~ note.id ~ "/attachments/" ~ att.path.split('/', 1)[1] %}
+            <img
+              src="{{ src }}"
+              class="max-h-48 rounded-lg border border-slate-800 object-contain bg-slate-950 cursor-zoom-in"
+              loading="lazy"
+              alt=""
+              onclick="infoguanaLightbox(this.src)"
+            >
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% if note.description %}
+      <p class="text-slate-500 text-xs italic whitespace-pre-wrap break-words">{{ note.description }}</p>
+    {% endif %}
+
+    {% if note.links %}
+      {# Edges with confirmed_by_user=0 are filtered out at the DB layer.
+         Render outgoing first ("→ supersedes ..."), then incoming
+         ("← superseded by ..."), each row collapses multiple targets of the
+         same edge_type into a single line with chip-per-target. #}
+      {% set _verbs = {
+        'implements':       ('implements',       'implemented by'),
+        'caused_by':        ('caused by',        'cause of'),
+        'supersedes':       ('supersedes',       'superseded by'),
+        'references':       ('references',       'referenced by'),
+        'bundled_with':     ('bundled with',     'bundled with'),
+        'prerequisite_for': ('prerequisite for', 'depends on'),
+      } %}
+      {# Mirror EDGE_TYPE_COLORS from graph.html so the verb label in the
+         side-panel chip row reads in the same hue as the graph halo on
+         the linked node. Kept in sync by hand. #}
+      {% set _edge_colors = {
+        'implements':       '#34d399',
+        'caused_by':        '#f87171',
+        'supersedes':       '#fbbf24',
+        'references':       '#38bdf8',
+        'bundled_with':     '#a78bfa',
+        'prerequisite_for': '#e879f9',
+      } %}
+      <div class="mt-2 space-y-1 text-xs">
+        {% for direction in ['out', 'in'] %}
+          {% set _dir_links = note.links | selectattr('direction', 'equalto', direction) | list %}
+          {% for edge_type, group in _dir_links | groupby('edge_type') %}
+            {% set verb = _verbs[edge_type][0] if direction == 'out' else _verbs[edge_type][1] %}
+            <div class="flex flex-wrap gap-1.5 items-center">
+              <span class="shrink-0" style="color: {{ _edge_colors[edge_type] }}">{{ '→' if direction == 'out' else '←' }} {{ verb }}</span>
+              {% for link in group %}
+                <a href="/browse?id={{ link.target_id }}"
+                   data-link-id="{{ link.target_id }}"
+                   class="link-chip px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 inline-flex items-center gap-1.5 max-w-full transition"
+                   title="{{ link.target_preview }}">
+                  <span class="font-mono text-slate-500 shrink-0">#{{ link.target_id }}</span>
+                  <span class="truncate text-slate-300">{{ link.target_preview }}</span>
+                </a>
+              {% endfor %}
+            </div>
+          {% endfor %}
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% if note.type in ('plan', 'task') and note.linked_prs %}
+      <div class="mt-2 flex flex-wrap gap-1.5 text-xs">
+        {% for pr in note.linked_prs %}
+          {% set parts = pr.rstrip('/').split('/') %}
+          {% set label = (parts[-3] ~ '#' ~ parts[-1]) if parts|length >= 3 and '/pull/' in pr else pr %}
+          <a href="{{ pr }}" target="_blank" rel="noopener"
+             class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/30 transition"
+             title="{{ pr }}">
+            {{ label }}
+          </a>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+
+  <form
+    class="card-edit p-3 space-y-2 hidden"
+    hx-post="/notes/{{ note.id }}/edit{% if collapsed %}?collapsed=1{% endif %}"
+    hx-target="#note-{{ note.id }}"
+    hx-swap="outerHTML"
+  >
+    <textarea
+      name="content"
+      rows="4"
+      class="w-full rounded-lg bg-slate-950 border border-slate-700 focus:border-slate-500 focus:outline-none px-3 py-2 text-sm resize-y text-slate-100"
+    >{{ note.content }}</textarea>
+    <input
+      name="project"
+      value="{{ note.project or '' }}"
+      placeholder="project (optional)"
+      class="w-full rounded-lg bg-slate-950 border border-slate-700 focus:border-slate-500 focus:outline-none px-3 py-2 text-sm placeholder:text-slate-500 text-slate-100"
+    >
+    {# Type picker: "auto" (empty value) preserves the original "save and
+       reclassify via Haiku" behavior; picking a specific type skips the LLM
+       round trip and writes that type directly. Used for migrations like
+       plan → task without nuking tags/description on the way through
+       'unsorted'. #}
+    <select
+      name="type"
+      class="w-full rounded-lg bg-slate-950 border border-slate-700 focus:border-slate-500 focus:outline-none px-3 py-2 text-sm text-slate-100"
+    >
+      <option value="">auto (reclassify)</option>
+      {% for t in ['idea', 'memory', 'feedback', 'feature', 'reference', 'plan', 'task', 'rule'] %}
+        <option value="{{ t }}" {% if note.type == t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+    <div class="flex gap-2 justify-end">
+      <button type="button" onclick="infoguanaSetMode({{ note.id }}, 'view')"
+        class="px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 active:bg-slate-700 rounded-lg transition">cancel</button>
+      <button type="submit"
+        class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-400 active:bg-indigo-600 rounded-lg transition">save</button>
+    </div>
+  </form>
+
+  <div class="card-confirm hidden">
+    <div class="px-4 py-3">
+      <div class="flex items-center gap-2 flex-wrap text-xs mb-1">
+        <span class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{{ note.type }}</span>
+        {% if note.project %}<span class="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300">{{ note.project }}</span>{% endif %}
+      </div>
+      {% if note.content %}
+        <p class="text-slate-400 text-sm whitespace-pre-wrap break-words line-clamp-3">{{ note.content }}</p>
+      {% endif %}
+    </div>
+    <div class="flex items-stretch border-t border-red-900/60 bg-red-950/40">
+      <div class="flex-1 flex items-center px-3 py-2 text-sm text-red-300">delete this memory?</div>
+      <button type="button" onclick="infoguanaSetMode({{ note.id }}, 'view')"
+        class="px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 active:bg-slate-700 border-l border-slate-800 transition">cancel</button>
+      <button type="button" onclick="infoguanaDelete({{ note.id }}, this)"
+        class="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-400 active:bg-red-600 transition">delete</button>
+    </div>
+  </div>
+</article>

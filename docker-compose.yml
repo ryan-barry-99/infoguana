@@ -1,0 +1,35 @@
+services:
+  infoguana:
+    build: .
+    container_name: infoguana
+    restart: unless-stopped
+    ports:
+      - "${INFOGUANA_PORT:-8789}:8789"
+    # .env is optional — every setting below has a default. Compose
+    # auto-loads .env from this directory for ${VAR} interpolation, so
+    # dropping overrides into .env still works.
+    environment:
+      INFOGUANA_HOST: ${INFOGUANA_HOST:-0.0.0.0}
+      INFOGUANA_PORT: ${INFOGUANA_PORT:-8789}
+      INFOGUANA_DB_PATH: ${INFOGUANA_DB_PATH:-/data/infoguana.db}
+      INFOGUANA_BACKUP_DIR: ${INFOGUANA_BACKUP_DIR:-/backups}
+      INFOGUANA_CLAUDE_BIN: ${INFOGUANA_CLAUDE_BIN:-claude}
+      INFOGUANA_CLASSIFY_MODEL: ${INFOGUANA_CLASSIFY_MODEL:-claude-haiku-4-5}
+      INFOGUANA_EMBED_MODEL: ${INFOGUANA_EMBED_MODEL:-BAAI/bge-small-en-v1.5}
+      INFOGUANA_FS_ALLOWLIST: ${INFOGUANA_FS_ALLOWLIST:-/root/code}
+      # Empty → entrypoint generates one and persists it to /data/.mcp_secret.
+      INFOGUANA_MCP_SECRET: ${INFOGUANA_MCP_SECRET:-}
+      # GitHub integration is optional; chat features degrade gracefully if unset.
+      INFOGUANA_GITHUB_READ_TOKEN: ${INFOGUANA_GITHUB_READ_TOKEN:-}
+      INFOGUANA_GITHUB_BOT_TOKENS: ${INFOGUANA_GITHUB_BOT_TOKENS:-}
+    volumes:
+      - ./data:/data
+      - ./backups:/backups
+      # Persistent claude CLI auth. Auth once via:
+      #   docker compose exec infoguana claude /login
+      - ./claude-config:/claude-config
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8789/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

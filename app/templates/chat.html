@@ -1,0 +1,1147 @@
+{% extends "base.html" %}
+{% block title %}chat · infoguana{% endblock %}
+{% block main_class %}h-[calc(100dvh-57px)] flex relative overflow-hidden{% endblock %}
+{% block content %}
+<style>
+  /* Chat is a fixed-viewport surface. With interactive-widget=resizes-content
+     in the viewport meta, Android Chrome resizes the layout viewport when
+     the keyboard opens, so 100dvh naturally shrinks and main fits.
+     iOS Safari doesn't honor this fully — there it falls back to native
+     scroll-input-into-view, which is imperfect but doesn't fight the user. */
+  html, body { height: 100dvh; min-height: 0 !important; overflow: hidden; overscroll-behavior: none; }
+</style>
+<aside
+  id="sidebar"
+  class="absolute md:static inset-y-0 left-0 z-30 w-64 shrink-0 border-r border-slate-800 bg-slate-900 flex flex-col transform transition-transform -translate-x-full md:translate-x-0"
+>
+  <div class="p-3 border-b border-slate-800 flex gap-2">
+    <a
+      href="/chat"
+      onclick="closeSidebarIfMobile()"
+      class="flex-1 text-center rounded-lg bg-indigo-500 hover:bg-indigo-400 active:bg-indigo-600 text-white font-medium px-3 py-2 text-sm transition"
+    >+ new chat</a>
+    <button
+      type="button"
+      aria-label="close sidebar"
+      onclick="toggleSidebar()"
+      class="md:hidden rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 text-sm"
+    >×</button>
+  </div>
+  <nav class="flex-1 overflow-y-auto p-2 space-y-1">
+    {% for c in chats %}
+    <div
+      data-chat-id="{{ c.id }}"
+      class="group flex items-center justify-between gap-1 rounded-lg px-2 py-1.5 text-sm {% if current and c.id == current.id %}bg-slate-800 text-slate-100{% else %}text-slate-400 hover:bg-slate-800/50 hover:text-slate-200{% endif %}"
+    >
+      <a href="/chat?chat_id={{ c.id }}" class="flex-1 truncate" onclick="closeSidebarIfMobile()">{{ c.title }}</a>
+      <button
+        type="button"
+        aria-label="delete chat"
+        onclick="chatDeleteFromSidebar({{ c.id }}, {{ c.title | tojson | forceescape }})"
+        class="md:opacity-0 md:group-hover:opacity-100 text-slate-500 hover:text-red-400 px-1 leading-none"
+      >×</button>
+    </div>
+    {% else %}
+    <p class="text-xs text-slate-600 p-2">no chats yet</p>
+    {% endfor %}
+  </nav>
+</aside>
+
+<div
+  id="sidebar-backdrop"
+  class="hidden md:hidden fixed inset-0 bg-black/50 z-20"
+  onclick="toggleSidebar()"
+></div>
+
+<section class="flex-1 flex flex-col min-w-0">
+  <header class="flex items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/30">
+    <button
+      type="button"
+      aria-label="toggle sidebar"
+      onclick="toggleSidebar()"
+      class="rounded-lg bg-slate-800/60 hover:bg-slate-700 text-slate-300 px-2.5 py-1.5 text-sm leading-none shrink-0"
+      title="chats"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path d="M2 4.75A.75.75 0 0 1 2.75 4h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 4.75Zm0 5A.75.75 0 0 1 2.75 9h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 9.75Zm0 5a.75.75 0 0 1 .75-.75h14.5a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1-.75-.75Z"/></svg>
+    </button>
+    {% if current %}
+    <h1 class="flex-1 text-sm font-medium text-slate-200 truncate flex items-center gap-2 min-w-0">
+      <span id="chat-header-title" class="truncate">{{ current.title }}</span>
+      {% if current.project %}
+      <span
+        class="shrink-0 inline-flex items-center rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[10px] uppercase tracking-wide px-2 py-0.5"
+        title="seeded from context(project={{ current.project }})"
+      >{{ current.project }}</span>
+      {% endif %}
+    </h1>
+    <select
+      data-chat-id="{{ current.id }}"
+      data-current-model="{{ current.model }}"
+      onchange="chatSetModel(this)"
+      class="shrink-0 bg-slate-900 border border-slate-700 rounded-md text-xs text-slate-300 px-2 py-1 focus:outline-none focus:border-slate-500"
+    >
+      {% if current.model not in models %}
+        <option value="{{ current.model }}" selected>{{ current.model }}</option>
+      {% endif %}
+      {% for m in models %}
+        <option value="{{ m }}" {% if m == current.model %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <a
+      href="/chats/{{ current.id }}/export.md"
+      title="export chat as markdown"
+      aria-label="export chat"
+      download
+      class="shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-slate-800 transition"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+        <path fill-rule="evenodd" d="M10 1a.75.75 0 0 1 .75.75v8.69l2.97-2.97a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.53a.75.75 0 0 1 1.06-1.06l2.97 2.97V1.75A.75.75 0 0 1 10 1Zm-7 13.25a.75.75 0 0 1 .75.75v1.25c0 .414.336.75.75.75h11a.75.75 0 0 0 .75-.75V15a.75.75 0 0 1 1.5 0v1.25A2.25 2.25 0 0 1 15.5 18.5h-11A2.25 2.25 0 0 1 2.25 16.25V15a.75.75 0 0 1 .75-.75Z" clip-rule="evenodd"/>
+      </svg>
+    </a>
+    {% else %}
+    <h1 class="flex-1 text-sm font-medium text-slate-400">chat</h1>
+    {% endif %}
+  </header>
+
+  <div class="relative flex-1 min-h-0 flex flex-col">
+    <div id="messages" class="flex-1 overflow-y-auto px-4" data-chat-id="{{ current.id if current else '' }}">
+      {% if current %}
+        {% for msg in messages %}
+          {% set m = msg %}{% include "_chat_message.html" %}
+        {% else %}
+          <div id="empty-hint" class="flex flex-col items-center justify-center gap-3 py-12 text-center">
+            <img src="/static/infoguana.png" alt="infoguana" class="w-96 h-96 max-w-[65vmin] max-h-[65vmin] select-none" draggable="false" />
+            <p class="text-slate-500 text-sm max-w-md -mt-16">ask infoguana anything. it can search past notes and save new ones.</p>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div id="empty-hint" class="flex flex-col items-center justify-center gap-3 py-12 text-center">
+          <img src="/static/infoguana.png" alt="infoguana" class="w-96 h-96 max-w-[65vmin] max-h-[65vmin] select-none" draggable="false" />
+          <p class="text-slate-500 text-sm max-w-md -mt-16">start a new chat. pick a project to seed it with that project's memories.</p>
+        </div>
+      {% endif %}
+    </div>
+    <button
+      id="scroll-bottom-btn"
+      type="button"
+      aria-label="scroll to latest"
+      title="scroll to latest"
+      onclick="scrollMessages({ force: true, smooth: true })"
+      class="hidden absolute bottom-3 right-4 z-10 w-10 h-10 rounded-full bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 shadow-lg backdrop-blur transition flex items-center justify-center"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+        <path fill-rule="evenodd" d="M10 3a.75.75 0 0 1 .75.75v10.69l3.72-3.72a.75.75 0 1 1 1.06 1.06l-5 5a.75.75 0 0 1-1.06 0l-5-5a.75.75 0 1 1 1.06-1.06l3.72 3.72V3.75A.75.75 0 0 1 10 3Z" clip-rule="evenodd"/>
+      </svg>
+    </button>
+  </div>
+
+  <form
+    id="send-form"
+    onsubmit="event.preventDefault(); sendChat(this);"
+    class="border-t border-slate-800 p-3 bg-slate-900/30"
+  >
+    {% if not current %}
+    <div class="flex gap-2 mb-2">
+      <select
+        name="project"
+        title="seed the first turn with this project's infoguana context"
+        class="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-md text-xs text-slate-300 px-2 py-1.5 focus:outline-none focus:border-slate-500"
+      >
+        <option value="">(auto — seed from first message)</option>
+        {% for p in projects %}
+          <option value="{{ p }}">{{ p }}</option>
+        {% endfor %}
+      </select>
+      <select
+        name="model"
+        class="shrink-0 bg-slate-900 border border-slate-700 rounded-md text-xs text-slate-300 px-2 py-1.5 focus:outline-none focus:border-slate-500"
+      >
+        {% for m in models %}
+          <option value="{{ m }}">{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <div id="attachment-strip" class="flex flex-wrap gap-2 mb-2 hidden"></div>
+    <div class="flex gap-2 items-end">
+      <input
+        id="attach-input"
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+        multiple
+        class="hidden"
+        onchange="handleFiles(this.files); this.value='';"
+      />
+      <button
+        type="button"
+        title="attach images or PDFs"
+        aria-label="attach files"
+        onclick="document.getElementById('attach-input').click()"
+        class="rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 text-sm transition shrink-0 disabled:opacity-50"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path fill-rule="evenodd" d="M15.621 4.379a3 3 0 0 0-4.242 0l-7 7a3 3 0 0 0 4.243 4.243l4.95-4.95a.75.75 0 0 1 1.06 1.06l-4.95 4.95a4.5 4.5 0 0 1-6.364-6.364l7-7a4.5 4.5 0 0 1 6.572 6.151L9.81 14.51a2.25 2.25 0 0 1-3.182-3.182L11.84 6.117a.75.75 0 1 1 1.06 1.06l-5.21 5.21a.75.75 0 0 0 1.06 1.061L15.62 6.62a3 3 0 0 0 0-4.242Z" clip-rule="evenodd"/></svg>
+      </button>
+      <textarea
+        name="content"
+        rows="2"
+        placeholder="message… (enter to send, shift+enter for newline; paste images)"
+        onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();this.form.requestSubmit();}"
+        onpaste="handlePaste(event)"
+        class="flex-1 rounded-xl bg-slate-900 border border-slate-800 focus:border-slate-600 focus:outline-none px-3 py-2 text-base md:text-sm resize-none placeholder:text-slate-500 disabled:opacity-50"
+      ></textarea>
+      <button
+        type="submit"
+        class="composer-action rounded-lg bg-indigo-500 hover:bg-indigo-400 active:bg-indigo-600 text-white font-medium px-4 py-2 text-sm transition shrink-0 disabled:opacity-50"
+      >send</button>
+    </div>
+  </form>
+</section>
+
+<script>
+  // --- sidebar ---
+  function isMobile() { return window.matchMedia('(max-width: 767px)').matches; }
+  function toggleSidebar() {
+    const s = document.getElementById('sidebar');
+    const b = document.getElementById('sidebar-backdrop');
+    const closed = s.classList.toggle('-translate-x-full');
+    if (isMobile()) b.classList.toggle('hidden', closed);
+  }
+  function closeSidebarIfMobile() {
+    if (!isMobile()) return;
+    document.getElementById('sidebar').classList.add('-translate-x-full');
+    document.getElementById('sidebar-backdrop').classList.add('hidden');
+  }
+
+  // --- messages scroll ---
+  // Sticky auto-scroll: follow only when the user is already at the bottom.
+  // Once they scroll up to read history, stop fighting them — even as new
+  // streamed tokens land. Resumes following when they scroll back down.
+  const SCROLL_STICK_PX = 80;
+  function isNearBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_STICK_PX;
+  }
+  // Tracked via the scroll event so callers can decide stickiness *before*
+  // they mutate the DOM. Computing isNearBottom() after appending a tall
+  // node (e.g. a tool-call pill) gives a false negative: scrollHeight has
+  // already grown by the node's height while scrollTop hasn't moved, so the
+  // user appears "scrolled up" even though they were pinned at the bottom.
+  let stuckToBottom = true;
+  function scrollMessages({ force = false, smooth = false } = {}) {
+    const el = document.getElementById('messages');
+    if (!el) return;
+    // Skip when the empty-state hint is showing — auto-scroll would push the
+    // logo out of view on small (keyboard-open) viewports.
+    if (el.querySelector('#empty-hint')) { updateScrollBtn(); return; }
+    if (force || stuckToBottom) {
+      if (smooth) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      else el.scrollTop = el.scrollHeight;
+      stuckToBottom = true;
+    }
+    updateScrollBtn();
+  }
+  function updateScrollBtn() {
+    const el = document.getElementById('messages');
+    const btn = document.getElementById('scroll-bottom-btn');
+    if (!el || !btn) return;
+    const hasContent = !el.querySelector('#empty-hint') && el.scrollHeight > el.clientHeight;
+    btn.classList.toggle('hidden', !hasContent || isNearBottom(el));
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    scrollMessages({ force: true });
+    // Images / fonts / late CSS keep growing the document after
+    // DOMContentLoaded. ResizeObserver fires whenever a child's box actually
+    // changes size (post-layout), so it catches every reflow that image-load
+    // events miss. While the pin is held we re-stick to the bottom on each
+    // tick. The pin drops on the first user scroll intent, or after a short
+    // safety window past window.load.
+    const messages = document.getElementById('messages');
+    if (!messages) return;
+    let initialPin = true;
+    const releasePin = () => {
+      if (!initialPin) return;
+      initialPin = false;
+      ro.disconnect();
+      mo.disconnect();
+    };
+    ['wheel', 'touchmove', 'keydown'].forEach((ev) =>
+      messages.addEventListener(ev, releasePin, { passive: true, once: true }),
+    );
+    messages.addEventListener('scroll', () => {
+      stuckToBottom = isNearBottom(messages);
+      updateScrollBtn();
+    }, { passive: true });
+    const ro = new ResizeObserver(() => {
+      if (initialPin) scrollMessages({ force: true });
+      updateScrollBtn();
+    });
+    for (const child of messages.children) ro.observe(child);
+    // Catch children added between DOMContentLoaded and pin release (e.g. a
+    // running-stream resume).
+    const mo = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1) ro.observe(node);
+        }
+      }
+    });
+    mo.observe(messages, { childList: true });
+    window.addEventListener('load', () => {
+      scrollMessages({ force: true });
+      // One more frame for any post-load reflow, then release.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        scrollMessages({ force: true });
+        releasePin();
+      }));
+    }, { once: true });
+  });
+
+  // If the chat was opened with ?initial=<msg> (e.g. from a plan-completion
+  // redirect), fill the textarea, strip the query param so refresh doesn't
+  // re-submit, and auto-submit so the user lands directly on the agent's
+  // first response.
+  document.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    const initial = params.get('initial');
+    if (!initial) return;
+    const form = document.getElementById('send-form');
+    const ta = form?.querySelector('textarea[name="content"]');
+    if (!form || !ta) return;
+    ta.value = initial;
+    params.delete('initial');
+    const qs = params.toString();
+    history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+    form.requestSubmit();
+  });
+
+  // Resume the home-page "new chat" flow: sendChat stashed the user's text
+  // before redirecting to the freshly-created chat. On load, replay it.
+  document.addEventListener('DOMContentLoaded', () => {
+    const pending = sessionStorage.getItem('infoguana_pending_msg');
+    if (!pending) return;
+    sessionStorage.removeItem('infoguana_pending_msg');
+    const form = document.getElementById('send-form');
+    const ta = form?.querySelector('textarea[name="content"]');
+    const messages = document.getElementById('messages');
+    if (!form || !ta || !messages?.dataset.chatId) return;
+    ta.value = pending;
+    form.requestSubmit();
+  });
+
+  // Update the sidebar chat-list entry for `chatId` in place. Called from
+  // the SSE 'chat_title' event so haiku-generated titles replace the
+  // first-message placeholder without a page reload.
+  function updateSidebarChatTitle(chatId, title) {
+    const link = document.querySelector(
+      `a[href="/chat?chat_id=${chatId}"]`,
+    );
+    if (link) link.textContent = title;
+    // Also update the header span and page <title> if this is the current chat.
+    const current = document.getElementById('messages')?.dataset.chatId;
+    if (current && parseInt(current, 10) === chatId) {
+      const header = document.getElementById('chat-header-title');
+      if (header) header.textContent = title;
+      document.title = title + ' · infoguana';
+    }
+  }
+
+  async function chatSetModel(sel) {
+    const chatId = sel.dataset.chatId;
+    const previous = sel.dataset.currentModel;
+    const next = sel.value;
+    if (!chatId || next === previous) return;
+    sel.disabled = true;
+    try {
+      const r = await fetch('/chats/' + chatId + '/model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ model: next }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      sel.dataset.currentModel = next;
+    } catch (e) {
+      sel.value = previous;
+      alert('could not change model: ' + e.message);
+    } finally {
+      sel.disabled = false;
+    }
+  }
+
+  // --- sidebar chat list actions ---
+  async function chatDeleteFromSidebar(chatId, title) {
+    if (!confirm(`Delete chat '${title}'?`)) return;
+    try {
+      const r = await fetch('/chats/' + chatId, { method: 'DELETE' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const currentRaw = document.getElementById('messages')?.dataset.chatId;
+      const currentId = currentRaw ? parseInt(currentRaw, 10) : null;
+      if (currentId === chatId) {
+        window.location.href = r.headers.get('HX-Redirect') || '/chat';
+        return;
+      }
+      document.querySelector(`#sidebar [data-chat-id="${chatId}"]`)?.remove();
+    } catch (e) {
+      alert('delete failed: ' + e.message);
+    }
+  }
+
+  // --- message actions (fork / edit / delete / stop) ---
+  async function chatDelete(messageId, btn) {
+    if (!confirm('Delete this message? It will be gone from this chat\'s history.')) return;
+    btn.disabled = true;
+    try {
+      const r = await fetch('/messages/' + messageId, { method: 'DELETE' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const el = document.querySelector(`[data-message-id="${messageId}"]`);
+      if (el) el.remove();
+    } catch (e) {
+      btn.disabled = false;
+      alert('delete failed: ' + e.message);
+    }
+  }
+  async function chatFork(messageId) {
+    const messages = document.getElementById('messages');
+    const chatId = messages?.dataset.chatId;
+    if (!chatId) return;
+    try {
+      const r = await fetch(`/chats/${chatId}/fork`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ from_message_id: String(messageId) }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      window.location.href = data.redirect;
+    } catch (e) {
+      alert('fork failed: ' + e.message);
+    }
+  }
+  async function chatStop(messageId, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch(`/messages/${messageId}/stop`, { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // No DOM updates here — the runner pushes a final `done` event when the
+      // cancellation lands, and the open SSE stream's done handler swaps the
+      // composer back to send mode and re-renders the bubble as its persisted body.
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      alert('stop failed: ' + e.message);
+    }
+  }
+
+  // Swap the form's submit button between 'send' (default) and 'stop' (while
+  // an assistant run is streaming). The textarea stays enabled so the user
+  // can draft the next message; sendChat refuses to actually send while the
+  // button is in stop mode.
+  const SEND_BTN_CLASS = 'composer-action rounded-lg bg-indigo-500 hover:bg-indigo-400 active:bg-indigo-600 text-white font-medium px-4 py-2 text-sm transition shrink-0 disabled:opacity-50';
+  const STOP_BTN_CLASS = 'composer-action rounded-lg bg-red-500/80 hover:bg-red-500 active:bg-red-600 text-white font-medium px-4 py-2 text-sm transition shrink-0 inline-flex items-center gap-1.5 disabled:opacity-50';
+  function setComposerMode(mode, messageId) {
+    const form = document.getElementById('send-form');
+    if (!form) return;
+    const btn = form.querySelector('button.composer-action');
+    const ta = form.querySelector('textarea');
+    if (!btn || !ta) return;
+    if (mode === 'stop') {
+      btn.dataset.mode = 'stop';
+      btn.dataset.messageId = String(messageId);
+      btn.type = 'button';
+      btn.className = STOP_BTN_CLASS;
+      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><rect x="5" y="5" width="10" height="10" rx="1"/></svg><span>stop</span>';
+      btn.disabled = false;
+      btn.onclick = () => {
+        const id = parseInt(btn.dataset.messageId, 10);
+        if (!isNaN(id)) chatStop(id, btn);
+      };
+    } else {
+      btn.dataset.mode = 'send';
+      delete btn.dataset.messageId;
+      btn.type = 'submit';
+      btn.className = SEND_BTN_CLASS;
+      btn.textContent = 'send';
+      btn.disabled = false;
+      btn.onclick = null;
+    }
+    ta.disabled = false;
+  }
+
+  // Inline-edit a user message. Swaps the text bubble for a textarea+save/cancel;
+  // on save, calls /messages/{id}/edit, removes all later messages from the DOM,
+  // restores the bubble with new text, and attaches a fresh assistant stream.
+  function chatEdit(messageId) {
+    const wrap = document.querySelector(`[data-message-id="${messageId}"]`);
+    if (!wrap) return;
+    const rel = wrap.querySelector('.relative');
+    if (!rel) return;
+    // The bubble holding the editable text — the indigo user-bubble div. We
+    // identify it by class fragment rather than position so attachments
+    // (which sit above) aren't disturbed.
+    const bubble = rel.querySelector('.bg-indigo-500\\/20');
+    if (!bubble) return;
+    // Already editing? Don't stack editors.
+    if (rel.querySelector('.edit-form')) return;
+    const originalText = bubble.textContent;
+
+    const form = document.createElement('div');
+    form.className = 'edit-form bg-indigo-500/10 border border-indigo-500/40 rounded-2xl rounded-br-sm px-3 py-2 text-sm';
+    const ta = document.createElement('textarea');
+    ta.className = 'block w-full min-w-[18rem] bg-transparent text-slate-100 outline-none resize-y';
+    ta.rows = Math.min(10, Math.max(2, originalText.split('\n').length));
+    ta.value = originalText;
+    const row = document.createElement('div');
+    row.className = 'flex justify-end gap-2 mt-2';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'cancel';
+    cancel.className = 'px-2 py-0.5 text-xs rounded text-slate-400 hover:text-slate-200';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.textContent = 'save & restart';
+    save.className = 'px-2 py-0.5 text-xs rounded bg-indigo-500 hover:bg-indigo-400 text-white';
+    row.appendChild(cancel);
+    row.appendChild(save);
+    form.appendChild(ta);
+    form.appendChild(row);
+
+    bubble.classList.add('hidden');
+    bubble.after(form);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+
+    const teardown = () => { form.remove(); bubble.classList.remove('hidden'); };
+    cancel.onclick = teardown;
+    ta.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); teardown(); }
+      if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
+        ev.preventDefault();
+        save.click();
+      }
+    });
+
+    save.onclick = async () => {
+      const newText = ta.value.trim();
+      if (!newText) { alert('message can\'t be empty'); return; }
+      save.disabled = true;
+      cancel.disabled = true;
+      ta.disabled = true;
+      try {
+        const r = await fetch(`/messages/${messageId}/edit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ content: newText }),
+        });
+        if (!r.ok) {
+          let detail = `HTTP ${r.status}`;
+          try { detail = (await r.json()).detail || detail; } catch {}
+          throw new Error(detail);
+        }
+        const data = await r.json();
+
+        // Server has truncated everything after the edited message; mirror
+        // that in the DOM so the user doesn't see stale turns flash before
+        // the new agent response streams in.
+        const messages = document.getElementById('messages');
+        let after = wrap.nextElementSibling;
+        while (after) {
+          const next = after.nextElementSibling;
+          after.remove();
+          after = next;
+        }
+
+        // Swap the new text in and tear down the editor.
+        bubble.textContent = newText;
+        teardown();
+
+        const refs = buildAssistantBubble();
+        messages.appendChild(refs.wrap);
+        refs.wrap.dataset.messageId = data.assistant_msg_id;
+        refs.wrap.dataset.runStatus = 'running';
+        scrollMessages({ force: true });
+
+        // attachStream toggles the form's send button into stop mode at start
+        // and restores it on done; nothing for chatEdit to manage here.
+        await attachStream(data.assistant_msg_id, refs);
+      } catch (e) {
+        save.disabled = false;
+        cancel.disabled = false;
+        ta.disabled = false;
+        alert('edit failed: ' + e.message);
+      }
+    };
+  }
+
+  function buildMsgActions(messageId, role) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-actions absolute -top-2 -right-1 flex gap-0.5 opacity-30 hover:opacity-100 group-hover:opacity-100 transition-opacity z-10';
+    const fork = document.createElement('button');
+    fork.type = 'button';
+    fork.title = 'fork from here';
+    fork.className = 'w-7 h-7 rounded-full bg-slate-900 border border-slate-700 text-slate-400 hover:text-indigo-300 hover:bg-slate-800 flex items-center justify-center';
+    fork.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M5 4a2 2 0 1 1 1 1.732V8a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V5.732A2 2 0 1 1 15 4 2 2 0 0 1 14 5.732V8a4 4 0 0 1-4 4h-.5v2.268a2 2 0 1 1-1 0V12H8a4 4 0 0 1-4-4V5.732A2 2 0 0 1 5 4Zm5 12a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z" clip-rule="evenodd"/></svg>';
+    fork.onclick = () => chatFork(messageId);
+    wrap.appendChild(fork);
+    if (role === 'user') {
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.title = 'edit & restart from here';
+      edit.className = 'w-7 h-7 rounded-full bg-slate-900 border border-slate-700 text-slate-400 hover:text-indigo-300 hover:bg-slate-800 flex items-center justify-center';
+      edit.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path d="M2.695 14.762l-1.262 3.155a.5.5 0 0 0 .65.65l3.155-1.262a4 4 0 0 0 1.343-.886L17.5 5.5a2.121 2.121 0 0 0-3-3L3.58 13.42a4 4 0 0 0-.885 1.343Z"/></svg>';
+      edit.onclick = () => chatEdit(messageId);
+      wrap.appendChild(edit);
+    }
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.title = 'delete this message';
+    del.className = 'w-7 h-7 rounded-full bg-slate-900 border border-slate-700 text-slate-400 hover:text-red-400 hover:bg-slate-800 flex items-center justify-center';
+    del.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75V5h-1.25a.75.75 0 0 0 0 1.5h.29l.737 10.562A2.25 2.25 0 0 0 8.022 19.25h3.956a2.25 2.25 0 0 0 2.245-2.188L14.96 6.5h.29a.75.75 0 0 0 0-1.5H14V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 3a1.25 1.25 0 0 1 1.25 1.25V5h-2.5V4.25A1.25 1.25 0 0 1 10 3ZM8.5 8.75a.75.75 0 0 1 1.5 0v6a.75.75 0 0 1-1.5 0v-6ZM11.75 8a.75.75 0 0 0-.75.75v6a.75.75 0 0 0 1.5 0v-6a.75.75 0 0 0-.75-.75Z" clip-rule="evenodd"/></svg>';
+    del.onclick = (ev) => chatDelete(messageId, ev.currentTarget);
+    wrap.appendChild(del);
+    return wrap;
+  }
+
+  // --- pending attachments (between user typing and form submit) ---
+  // Each entry: { id, file, mime, url (objectURL for preview, revoked on remove) }
+  const pendingAttachments = [];
+  let nextAttachmentId = 1;
+  const ALLOWED_MIME = new Set([
+    'image/png', 'image/jpeg', 'image/jpg', 'image/gif',
+    'image/webp', 'application/pdf',
+  ]);
+
+  function attachmentStripEl() {
+    return document.getElementById('attachment-strip');
+  }
+
+  function renderAttachmentStrip() {
+    const strip = attachmentStripEl();
+    if (!strip) return;
+    strip.innerHTML = '';
+    if (pendingAttachments.length === 0) {
+      strip.classList.add('hidden');
+      return;
+    }
+    strip.classList.remove('hidden');
+    for (const att of pendingAttachments) {
+      const tile = document.createElement('div');
+      tile.className = 'relative inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 p-1 pr-2';
+      if (att.mime.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.src = att.url;
+        img.alt = att.file.name;
+        img.className = 'w-12 h-12 object-cover rounded';
+        tile.appendChild(img);
+      } else {
+        const icon = document.createElement('div');
+        icon.className = 'w-12 h-12 rounded bg-slate-800 flex items-center justify-center text-slate-400';
+        icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5"><path fill-rule="evenodd" d="M4 2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.414a2 2 0 0 0-.586-1.414l-4.414-4.414A2 2 0 0 0 11.586 2H4Zm7 1.414L15.586 8H13a2 2 0 0 1-2-2V3.414Z" clip-rule="evenodd"/></svg>';
+        tile.appendChild(icon);
+      }
+      const label = document.createElement('span');
+      label.className = 'text-xs text-slate-300 max-w-[140px] truncate';
+      label.textContent = att.file.name;
+      tile.appendChild(label);
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.title = 'remove';
+      rm.className = 'absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 hover:text-red-400 text-xs leading-none flex items-center justify-center';
+      rm.textContent = '×';
+      rm.onclick = () => removeAttachment(att.id);
+      tile.appendChild(rm);
+      strip.appendChild(tile);
+    }
+  }
+
+  function addAttachment(file) {
+    const mime = (file.type || '').toLowerCase();
+    if (!ALLOWED_MIME.has(mime)) {
+      alert(`unsupported file type: ${mime || 'unknown'}`);
+      return;
+    }
+    const url = (file.type.startsWith('image/'))
+      ? URL.createObjectURL(file) : '';
+    pendingAttachments.push({
+      id: nextAttachmentId++, file, mime, url,
+    });
+    renderAttachmentStrip();
+  }
+
+  function removeAttachment(id) {
+    const idx = pendingAttachments.findIndex(a => a.id === id);
+    if (idx < 0) return;
+    const [att] = pendingAttachments.splice(idx, 1);
+    if (att.url) URL.revokeObjectURL(att.url);
+    renderAttachmentStrip();
+  }
+
+  function clearAttachments() {
+    for (const att of pendingAttachments) {
+      if (att.url) URL.revokeObjectURL(att.url);
+    }
+    pendingAttachments.length = 0;
+    renderAttachmentStrip();
+  }
+
+  function handleFiles(fileList) {
+    if (!fileList || fileList.length === 0) return;
+    for (const f of fileList) addAttachment(f);
+  }
+
+  function handlePaste(ev) {
+    const items = ev.clipboardData?.items;
+    if (!items) return;
+    let consumed = false;
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) {
+          addAttachment(f);
+          consumed = true;
+        }
+      }
+    }
+    // Only swallow the paste if we picked up image files; let plain-text
+    // paste fall through to the textarea.
+    if (consumed) ev.preventDefault();
+  }
+
+  // --- DOM builders (mirror _chat_message.html structure) ---
+  function buildUserBubble(text, messageId, attachments) {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-msg group flex gap-3 py-3 justify-end';
+    if (messageId != null) wrap.dataset.messageId = messageId;
+    const rel = document.createElement('div');
+    rel.className = 'relative max-w-[80%]';
+    if (attachments && attachments.length) {
+      const strip = document.createElement('div');
+      strip.className = 'msg-attachments flex flex-wrap gap-2 mb-1 justify-end';
+      for (const a of attachments) {
+        if (a.mime && a.mime.startsWith('image/')) {
+          const link = document.createElement('a');
+          link.href = a.url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.className = 'block rounded-lg overflow-hidden border border-indigo-500/30 bg-slate-900';
+          const img = document.createElement('img');
+          img.src = a.url;
+          img.alt = a.name || '';
+          img.className = 'block max-w-[240px] max-h-[240px] object-contain';
+          link.appendChild(img);
+          strip.appendChild(link);
+        } else {
+          const link = document.createElement('a');
+          link.href = a.url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.className = 'inline-flex items-center gap-2 rounded-lg border border-indigo-500/30 bg-slate-900 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800';
+          link.textContent = a.name || a.url;
+          strip.appendChild(link);
+        }
+      }
+      rel.appendChild(strip);
+    }
+    if (text) {
+      const bubble = document.createElement('div');
+      bubble.className = 'bg-indigo-500/20 border border-indigo-500/30 text-slate-100 rounded-2xl rounded-br-sm px-4 py-2 whitespace-pre-wrap text-sm';
+      bubble.textContent = text;
+      rel.appendChild(bubble);
+    }
+    if (messageId != null) rel.appendChild(buildMsgActions(messageId, 'user'));
+    wrap.appendChild(rel);
+    return wrap;
+  }
+
+  function buildAssistantBubble() {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-msg group flex gap-3 py-3';
+    const inner = document.createElement('div');
+    inner.className = 'relative max-w-[80%] space-y-2 flex flex-col';
+    const pills = document.createElement('div');
+    pills.className = 'pills flex flex-wrap gap-1.5 hidden';
+    const textWrap = document.createElement('div');
+    textWrap.className = 'assistant-text bg-slate-800/60 border border-slate-700/60 text-slate-100 rounded-2xl rounded-bl-sm px-4 py-2 whitespace-pre-wrap text-sm';
+    const pending = document.createElement('span');
+    pending.className = 'pending inline-flex items-center gap-1.5 text-slate-400';
+    pending.innerHTML = '<svg class="w-3.5 h-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-25"/><path fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"/></svg><span>thinking…</span>';
+    textWrap.appendChild(pending);
+    const textNode = document.createElement('span');
+    textNode.className = 'text';
+    textWrap.appendChild(textNode);
+    inner.appendChild(pills);
+    inner.appendChild(textWrap);
+    wrap.appendChild(inner);
+    return { wrap, pills, textWrap, textNode, pending };
+  }
+
+  function buildPill(name) {
+    const det = document.createElement('details');
+    det.className = 'group inline-block text-xs';
+    const sum = document.createElement('summary');
+    sum.className = 'cursor-pointer list-none inline-flex items-center gap-1 rounded-full bg-slate-800/50 hover:bg-slate-800 border border-slate-700 text-slate-400 px-2.5 py-1 select-none';
+    sum.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 opacity-70"><path d="M11.983 1.907a.75.75 0 0 0-1.292-.657l-8.5 9.5A.75.75 0 0 0 2.75 12h6.572l-1.305 6.093a.75.75 0 0 0 1.292.657l8.5-9.5A.75.75 0 0 0 17.25 8h-6.572l1.305-6.093Z"/></svg>';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'font-mono';
+    nameSpan.textContent = name;
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner w-2 h-2 rounded-full bg-amber-400 animate-pulse';
+    sum.appendChild(nameSpan);
+    sum.appendChild(spinner);
+    const body = document.createElement('div');
+    body.className = 'mt-2 rounded-lg bg-slate-900/80 border border-slate-800 p-3 font-mono text-[11px] leading-relaxed text-slate-300 max-w-full overflow-x-auto';
+    const argsLabel = document.createElement('div');
+    argsLabel.className = 'text-slate-500 mb-1';
+    argsLabel.textContent = 'args';
+    const argsPre = document.createElement('pre');
+    argsPre.className = 'args whitespace-pre-wrap break-words';
+    argsPre.textContent = '…';
+    body.appendChild(argsLabel);
+    body.appendChild(argsPre);
+    det.appendChild(sum);
+    det.appendChild(body);
+    return { el: det, spinner, argsPre, body };
+  }
+
+  // Find the streaming-shell refs inside an existing assistant `wrap` div
+  // (rendered server-side for run_status='running' messages, or built fresh
+  // by buildAssistantBubble when sending). Returns null if the structure
+  // doesn't match — e.g. a completed message that already has its final
+  // markdown bubble.
+  function refsFromWrap(wrap) {
+    const pills = wrap.querySelector('.pills');
+    const textWrap = wrap.querySelector('.assistant-text');
+    if (!pills || !textWrap) return null;
+    const textNode = textWrap.querySelector('.text');
+    const pending = textWrap.querySelector('.pending');
+    if (!textNode) return null;
+    return { wrap, pills, textWrap, textNode, pending };
+  }
+
+  // Attach an EventSource to the assistant message's event log and apply
+  // each event to the bubble. Handles both fresh sends and on-load resume.
+  // Returns a Promise that resolves when the run finishes (done event or
+  // terminal error) so callers can re-enable input controls.
+  function attachStream(messageId, refs, options = {}) {
+    const { wrap, pills, textWrap, textNode } = refs;
+    let { pending } = refs;
+    setComposerMode('stop', messageId);
+    const after = options.after != null ? options.after : -1;
+    const pillByToolId = new Map();
+    let gotContent = false;
+
+    // Markdown streaming: keep all text-deltas in a single buffer; on each
+    // frame, re-render everything up to the last newline as markdown HTML
+    // and show the trailing partial line as a plain-text live span. Result:
+    // headings/lists/code snap into formatted form the moment their line
+    // ends; the in-flight line still types out visibly.
+    let textBuffer = '';
+    let renderQueued = false;
+    const mdReady = () =>
+      typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined';
+
+    const renderTextBuffer = () => {
+      renderQueued = false;
+      textWrap.classList.remove('whitespace-pre-wrap');
+      textWrap.classList.add('markdown-body');
+      if (!mdReady()) {
+        textNode.textContent = textBuffer;
+        return;
+      }
+      const lastNL = textBuffer.lastIndexOf('\n');
+      const renderedSrc = lastNL >= 0 ? textBuffer.slice(0, lastNL + 1) : '';
+      const live = lastNL >= 0 ? textBuffer.slice(lastNL + 1) : textBuffer;
+      let html = '';
+      if (renderedSrc) {
+        html = DOMPurify.sanitize(
+          marked.parse(renderedSrc, { breaks: true, gfm: true }),
+        );
+      }
+      textNode.innerHTML = html;
+      if (live) {
+        const liveSpan = document.createElement('span');
+        liveSpan.className = 'whitespace-pre-wrap';
+        liveSpan.textContent = live;
+        textNode.appendChild(liveSpan);
+      }
+    };
+
+    const scheduleRender = () => {
+      if (renderQueued) return;
+      renderQueued = true;
+      requestAnimationFrame(renderTextBuffer);
+    };
+
+    return new Promise((resolve) => {
+      const url = `/messages/${messageId}/events?after=${after}`;
+      const es = new EventSource(url);
+
+      const ensurePendingGone = () => {
+        if (!gotContent && pending) {
+          pending.remove();
+          pending = null;
+        }
+        gotContent = true;
+      };
+
+      es.addEventListener('text', (e) => {
+        const d = JSON.parse(e.data);
+        ensurePendingGone();
+        textBuffer += d.delta;
+        scheduleRender();
+        scrollMessages();
+      });
+
+      es.addEventListener('tool_use_start', (e) => {
+        const d = JSON.parse(e.data);
+        ensurePendingGone();
+        const pill = buildPill(d.name);
+        pills.appendChild(pill.el);
+        pills.classList.remove('hidden');
+        pillByToolId.set(d.id, pill);
+        // Force a paragraph break before any post-tool text so it doesn't
+        // glue onto whatever came before.
+        if (textBuffer && !textBuffer.endsWith('\n\n')) {
+          textBuffer += textBuffer.endsWith('\n') ? '\n' : '\n\n';
+          scheduleRender();
+        }
+        if (!textBuffer.trim()) textWrap.classList.add('hidden');
+        scrollMessages();
+      });
+
+      es.addEventListener('tool_use', (e) => {
+        const d = JSON.parse(e.data);
+        const pill = pillByToolId.get(d.id);
+        if (pill) pill.argsPre.textContent = JSON.stringify(d.args, null, 2);
+      });
+
+      es.addEventListener('chat_title', (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          updateSidebarChatTitle(d.chat_id, d.title);
+        } catch {}
+      });
+
+      es.addEventListener('tool_result', (e) => {
+        const d = JSON.parse(e.data);
+        const pill = pillByToolId.get(d.id);
+        if (!pill) return;
+        if (pill.spinner) pill.spinner.remove();
+        const label = document.createElement('div');
+        label.className = 'text-slate-500 mt-3 mb-1';
+        label.textContent = 'result';
+        const pre = document.createElement('pre');
+        pre.className = 'whitespace-pre-wrap break-words';
+        pre.textContent = d.result;
+        pill.body.appendChild(label);
+        pill.body.appendChild(pre);
+      });
+
+      es.addEventListener('error', (e) => {
+        // Two cases: (a) a server-emitted 'error' event has .data; (b) a
+        // network-level EventSource error has no .data. For network errors
+        // we close instead of letting EventSource auto-reconnect — the URL
+        // would replay from after=-1 and double-render. Refresh to resume.
+        if (!e.data) {
+          es.close();
+          ensurePendingGone();
+          textWrap.classList.remove('hidden');
+          textBuffer += '\n\n_(stream disconnected — refresh to resume)_\n';
+          scheduleRender();
+          setComposerMode('send');
+          resolve();
+          return;
+        }
+        let msg = 'unknown';
+        try { msg = JSON.parse(e.data).message || msg; } catch {}
+        ensurePendingGone();
+        textWrap.classList.remove('hidden');
+        textBuffer += `\n\n_(error: ${msg})_\n`;
+        scheduleRender();
+      });
+
+      es.addEventListener('done', () => {
+        es.close();
+        pillByToolId.forEach(p => p.spinner && p.spinner.remove());
+        if (pending) { pending.remove(); pending = null; }
+        setComposerMode('send');
+        // Make sure the bubble has fork/delete actions.
+        const inner = wrap.querySelector('.relative');
+        if (inner && !inner.querySelector('.msg-actions')) {
+          inner.appendChild(buildMsgActions(messageId, 'assistant'));
+        }
+        // Final render: full buffer as markdown, no live span.
+        if (!textBuffer && pills.children.length === 0) {
+          textWrap.classList.remove('hidden');
+          textNode.textContent = '(no response)';
+        } else if (!textBuffer) {
+          textWrap.classList.add('hidden');
+        } else {
+          textWrap.classList.remove('hidden');
+          textWrap.classList.remove('whitespace-pre-wrap');
+          textWrap.classList.add('markdown-body');
+          if (mdReady()) {
+            textNode.innerHTML = DOMPurify.sanitize(
+              marked.parse(textBuffer, { breaks: true, gfm: true }),
+            );
+          } else {
+            textNode.textContent = textBuffer;
+          }
+        }
+        // Drop the data-run-status marker so a future page load doesn't try
+        // to resume a finished run.
+        wrap.removeAttribute('data-run-status');
+        scrollMessages();
+        resolve();
+      });
+    });
+  }
+
+  async function sendChat(form) {
+    const ta = form.querySelector('textarea');
+    const btn = form.querySelector('button.composer-action');
+    // While a run is streaming the button is in stop mode — Enter-to-send
+    // would race the active stream. Let the user keep drafting; they can
+    // press Enter again once the response finishes.
+    if (btn && btn.dataset.mode === 'stop') return;
+    // Reentrancy guard for the brief window between submit and the stream
+    // attaching (the POST round-trip). Without this a fast double-Enter
+    // would fire two parallel sends.
+    if (form.dataset.sending === '1') return;
+    const text = ta.value.trim();
+    const hasAttachments = pendingAttachments.length > 0;
+    if (!text && !hasAttachments) return;
+
+    const messages = document.getElementById('messages');
+    const chatId = messages.dataset.chatId;
+
+    // No chat yet: this is the home-page "new chat" view. Create a chat with
+    // the inline project+model selectors, stash the pending message, and
+    // navigate. The destination page reattaches the running stream on load
+    // and the DOMContentLoaded handler auto-submits the stashed text.
+    if (!chatId) {
+      if (hasAttachments) {
+        // Pending files don't survive the redirect (no FileSystem handle).
+        // Tell the user to start the chat first.
+        alert('start a chat first, then attach images.');
+        return;
+      }
+      const projectSel = form.querySelector('select[name=project]');
+      const modelSel = form.querySelector('select[name=model]');
+      btn.disabled = true;
+      ta.disabled = true;
+      try {
+        const r = await fetch('/chats', {
+          method: 'POST',
+          headers: {
+            'HX-Request': 'true',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            model: modelSel ? modelSel.value : '',
+            project: projectSel ? projectSel.value : '',
+          }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const dest = r.headers.get('HX-Redirect') || '';
+        const m = dest.match(/chat_id=(\d+)/);
+        if (!m) throw new Error('no chat id in redirect');
+        sessionStorage.setItem('infoguana_pending_msg', text);
+        window.location.href = dest;
+      } catch (e) {
+        ta.disabled = false;
+        btn.disabled = false;
+        alert('failed to start chat: ' + e.message);
+      }
+      return;
+    }
+
+    const hint = document.getElementById('empty-hint');
+    if (hint) hint.remove();
+
+    const optimisticAttachments = pendingAttachments.map(a => ({
+      url: a.url, mime: a.mime, name: a.file.name,
+    }));
+    const filesToSend = pendingAttachments.map(a => a.file);
+    // Hand off ownership of the object URLs to the bubble — we'll let the
+    // bubble keep them until the page navigates away. clearAttachments only
+    // revokes URLs still in the pending list.
+    pendingAttachments.length = 0;
+    renderAttachmentStrip();
+
+    const userBubble = buildUserBubble(text, null, optimisticAttachments);
+    messages.appendChild(userBubble);
+    const refs = buildAssistantBubble();
+    messages.appendChild(refs.wrap);
+    scrollMessages({ force: true });
+
+    ta.value = '';
+    form.dataset.sending = '1';
+    btn.disabled = true;
+
+    try {
+      const fd = new FormData();
+      fd.append('content', text);
+      for (const f of filesToSend) {
+        fd.append('image', f, f.name);
+      }
+      const resp = await fetch(`/chats/${chatId}/send`, {
+        method: 'POST',
+        body: fd,
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      // Swap optimistic image previews (objectURLs) for the server-served
+      // URLs so a refresh shows the same images without the JS state.
+      if (data.attachments && data.attachments.length) {
+        const links = userBubble.querySelectorAll('.msg-attachments > a');
+        data.attachments.forEach((a, i) => {
+          const link = links[i];
+          if (!link) return;
+          link.href = a.url;
+          const img = link.querySelector('img');
+          if (img) img.src = a.url;
+        });
+        for (const o of optimisticAttachments) {
+          if (o.url && o.url.startsWith('blob:')) URL.revokeObjectURL(o.url);
+        }
+      }
+
+      // Backfill the user bubble's id + actions.
+      userBubble.dataset.messageId = data.user_msg_id;
+      const rel = userBubble.querySelector('.relative');
+      if (rel && !rel.querySelector('.msg-actions')) {
+        rel.appendChild(buildMsgActions(data.user_msg_id, 'user'));
+      }
+
+      // Tag the assistant wrap so an accidental refresh resumes from server.
+      refs.wrap.dataset.messageId = data.assistant_msg_id;
+      refs.wrap.dataset.runStatus = 'running';
+
+      await attachStream(data.assistant_msg_id, refs);
+    } catch (e) {
+      if (refs.pending) refs.pending.remove();
+      refs.textWrap.classList.remove('hidden');
+      const err = document.createElement('span');
+      err.className = 'text-red-400';
+      err.textContent = `(network error: ${e.message})`;
+      refs.textNode.appendChild(err);
+    } finally {
+      form.dataset.sending = '';
+      btn.disabled = false;
+      ta.focus();
+      scrollMessages();
+    }
+  }
+
+  // On page load, find any assistant message rendered as 'running' and
+  // attach an EventSource so the user sees the rest of the run live (even
+  // if they navigated to /browse mid-run and came back).
+  document.addEventListener('DOMContentLoaded', () => {
+    const running = document.querySelectorAll('[data-run-status="running"]');
+    running.forEach((wrap) => {
+      const id = wrap.dataset.messageId;
+      const refs = refsFromWrap(wrap);
+      if (!id || !refs) return;
+      attachStream(parseInt(id, 10), refs);
+    });
+  });
+</script>
+{% endblock %}

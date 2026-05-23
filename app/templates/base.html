@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0f172a">
+  <title>{% block title %}infoguana{% endblock %}</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/static/htmx.min.js"></script>
+  <script src="https://unpkg.com/alpinejs@3.14.3/dist/cdn.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    body { -webkit-tap-highlight-color: transparent; }
+
+    /* Markdown rendering for chat bubbles (class="markdown-body") */
+    .markdown-body > *:first-child { margin-top: 0; }
+    .markdown-body > *:last-child { margin-bottom: 0; }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3,
+    .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+      font-weight: 600; color: rgb(241 245 249);
+      margin: 0.7em 0 0.3em; line-height: 1.3;
+    }
+    .markdown-body h1 { font-size: 1.15em; }
+    .markdown-body h2 { font-size: 1.08em; }
+    .markdown-body h3 { font-size: 1.03em; }
+    .markdown-body p { margin: 0.45em 0; line-height: 1.55; }
+    .markdown-body ul, .markdown-body ol { margin: 0.45em 0; padding-left: 1.35em; }
+    .markdown-body ul { list-style: disc; }
+    .markdown-body ol { list-style: decimal; }
+    .markdown-body li { margin: 0.15em 0; line-height: 1.5; }
+    .markdown-body li > p { margin: 0.2em 0; }
+    .markdown-body strong { font-weight: 600; color: rgb(241 245 249); }
+    .markdown-body em { font-style: italic; }
+    .markdown-body code {
+      background: rgb(15 23 42); color: rgb(226 232 240);
+      padding: 0.1em 0.35em; border-radius: 4px;
+      font-size: 0.88em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .markdown-body pre {
+      background: rgb(15 23 42); border: 1px solid rgb(30 41 59);
+      padding: 0.75em 0.9em; border-radius: 8px;
+      overflow-x: auto; margin: 0.6em 0;
+      font-size: 0.85em; line-height: 1.5;
+    }
+    .markdown-body pre code { background: none; padding: 0; font-size: inherit; }
+    .markdown-body a { color: rgb(129 140 248); text-decoration: underline; text-underline-offset: 2px; word-break: break-word; }
+    .markdown-body a:hover { color: rgb(165 180 252); }
+    .markdown-body blockquote {
+      border-left: 3px solid rgb(51 65 85);
+      padding-left: 0.8em; margin: 0.5em 0;
+      color: rgb(148 163 184);
+    }
+    .markdown-body hr { border: 0; border-top: 1px solid rgb(30 41 59); margin: 0.8em 0; }
+    .markdown-body table { border-collapse: collapse; margin: 0.6em 0; font-size: 0.9em; }
+    .markdown-body th, .markdown-body td { border: 1px solid rgb(51 65 85); padding: 0.35em 0.7em; }
+    .markdown-body th { background: rgb(15 23 42); font-weight: 600; text-align: left; }
+  </style>
+  <script>
+    function infoguanaLightbox(src) {
+      const lb = document.getElementById('lightbox');
+      lb.querySelector('img').src = src;
+      lb.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+    function infoguanaLightboxClose() {
+      const lb = document.getElementById('lightbox');
+      lb.classList.add('hidden');
+      lb.querySelector('img').src = '';
+      document.body.style.overflow = '';
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        infoguanaLightboxClose();
+        const hm = document.getElementById('history-modal');
+        if (hm && !hm.classList.contains('hidden')) infoguanaCloseHistory();
+      }
+    });
+
+    // Note card state machine (no framework — just class toggles)
+    function infoguanaSetMode(noteId, mode) {
+      const card = document.getElementById('note-' + noteId);
+      if (!card) return;
+      card.dataset.mode = mode;
+      const view = card.querySelector('.card-view');
+      const edit = card.querySelector('.card-edit');
+      const confirm = card.querySelector('.card-confirm');
+      view.classList.toggle('hidden', mode !== 'view');
+      edit.classList.toggle('hidden', mode !== 'edit');
+      confirm.classList.toggle('hidden', mode !== 'confirm-delete');
+      card.classList.toggle('ring-1', mode !== 'view');
+      card.classList.toggle('ring-red-500/40', mode === 'confirm-delete');
+      card.classList.toggle('border-red-500/60', mode === 'confirm-delete');
+      card.classList.toggle('ring-indigo-500/40', mode === 'edit');
+      card.classList.toggle('border-indigo-500/60', mode === 'edit');
+      if (mode === 'edit') {
+        const ta = edit.querySelector('textarea');
+        if (ta) ta.focus();
+      }
+    }
+
+    // Plan status chip popover — three-state task tracker.
+    function infoguanaToggleStatus(noteId) {
+      // Close any other open popovers first.
+      document.querySelectorAll('[id^="status-popover-"]').forEach(el => {
+        if (el.id !== 'status-popover-' + noteId) el.classList.add('hidden');
+      });
+      const pop = document.getElementById('status-popover-' + noteId);
+      if (pop) pop.classList.toggle('hidden');
+    }
+    // Click anywhere outside a popover closes it.
+    document.addEventListener('click', () => {
+      document.querySelectorAll('[id^="status-popover-"]').forEach(el => el.classList.add('hidden'));
+    });
+
+    async function infoguanaSetStatus(noteId, status, btn) {
+      btn.disabled = true;
+      try {
+        // Preserve the current card's render mode (collapsed previews on
+        // /browse, full content on /capture) so the re-rendered card stays
+        // in the same shape after the status flip.
+        const cur = document.getElementById('note-' + noteId);
+        const collapsed = cur && cur.dataset.collapsed === '1' ? '1' : '';
+        const body = new URLSearchParams({ status });
+        const url = '/notes/' + noteId + '/status' + (collapsed ? '?collapsed=1' : '');
+        const r = await fetch(url, {
+          method: 'POST', body,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const html = await r.text();
+        const card = document.getElementById('note-' + noteId);
+        if (card) {
+          const wrap = document.createElement('div');
+          wrap.innerHTML = html.trim();
+          const fresh = wrap.firstElementChild;
+          if (fresh) card.replaceWith(fresh);
+        }
+      } catch (e) {
+        btn.disabled = false;
+        alert('status update failed: ' + e.message);
+      }
+    }
+
+    // Due-date editor — toggles the inline popover, submits or clears the
+    // date via /notes/{id}/due-date, and replaces the card with the
+    // re-rendered HTML the server returns.
+    function infoguanaToggleDueEditor(noteId) {
+      document.querySelectorAll('[id^="due-editor-"]').forEach(el => {
+        if (el.id !== 'due-editor-' + noteId) el.classList.add('hidden');
+      });
+      const ed = document.getElementById('due-editor-' + noteId);
+      if (!ed) return;
+      ed.classList.toggle('hidden');
+      if (!ed.classList.contains('hidden')) {
+        const inp = ed.querySelector('input[type="date"]');
+        if (inp) {
+          // Prefill with today when opening on a dateless plan/task — the
+          // common mistake is to tap "+ due" then "save" without ever
+          // interacting with the picker, which posts an empty string and
+          // gets read as a clear. Today is a safe default they can change.
+          if (!inp.value) {
+            const t = new Date();
+            const iso = t.getFullYear() + '-' +
+              String(t.getMonth() + 1).padStart(2, '0') + '-' +
+              String(t.getDate()).padStart(2, '0');
+            inp.value = iso;
+          }
+          inp.focus();
+          // Open the native picker immediately on browsers that support it
+          // (Chrome/Edge desktop + Android). Safari/iOS ignores this; the
+          // tap-the-input flow there still works because the input is
+          // already prefilled.
+          if (typeof inp.showPicker === 'function') {
+            try { inp.showPicker(); } catch (_) { /* requires user gesture */ }
+          }
+        }
+      }
+    }
+    document.addEventListener('click', () => {
+      document.querySelectorAll('[id^="due-editor-"]').forEach(el => el.classList.add('hidden'));
+    });
+
+    async function infoguanaPostDue(noteId, value, btn) {
+      if (btn) btn.disabled = true;
+      try {
+        const cur = document.getElementById('note-' + noteId);
+        const collapsed = cur && cur.dataset.collapsed === '1' ? '1' : '';
+        const body = new URLSearchParams({ due_date: value });
+        const url = '/notes/' + noteId + '/due-date' + (collapsed ? '?collapsed=1' : '');
+        const r = await fetch(url, {
+          method: 'POST', body,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          throw new Error(t || ('HTTP ' + r.status));
+        }
+        // On the agenda page, the bucket a card belongs to is computed
+        // server-side from due_date, so an in-place card swap leaves it
+        // stuck in its original section. A full reload re-buckets and
+        // restores the right project/group structure.
+        if (window.location.pathname.startsWith('/agenda')) {
+          window.location.reload();
+          return;
+        }
+        const html = await r.text();
+        const card = document.getElementById('note-' + noteId);
+        if (card) {
+          const wrap = document.createElement('div');
+          wrap.innerHTML = html.trim();
+          const fresh = wrap.firstElementChild;
+          if (fresh) card.replaceWith(fresh);
+        }
+      } catch (e) {
+        if (btn) btn.disabled = false;
+        alert('due-date update failed: ' + e.message);
+      }
+    }
+    function infoguanaSubmitDue(ev, noteId) {
+      const form = ev.target.closest('form');
+      const inp = form.querySelector('input[type="date"]');
+      const val = inp ? inp.value : '';
+      // No-op on empty submit so a stray click can't silently clear the
+      // existing date. Use the explicit "clear" button to remove a date.
+      if (!val) {
+        if (inp) inp.focus();
+        return;
+      }
+      infoguanaPostDue(noteId, val, form.querySelector('button[type="submit"]'));
+    }
+    function infoguanaClearDue(noteId, btn) {
+      infoguanaPostDue(noteId, '', btn);
+    }
+
+    async function infoguanaShipPlan(noteId, btn) {
+      // Already complete? clicking the same state just closes the popover.
+      if (btn.querySelector('.text-xs')?.textContent?.trim() === '✓') {
+        document.getElementById('status-popover-' + noteId)?.classList.add('hidden');
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const r = await fetch('/plans/' + noteId + '/complete-chat', { method: 'POST' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        window.location.href = data.redirect;
+      } catch (e) {
+        btn.disabled = false;
+        alert('could not start completion chat: ' + e.message);
+      }
+    }
+
+    async function infoguanaGraduate(noteId, btn) {
+      // Same shape as infoguanaShipPlan: POST opens a chat and redirects to it
+      // with an auto-submitting ?initial=<synthesis prompt>.
+      btn.disabled = true;
+      try {
+        const r = await fetch('/plans/' + noteId + '/graduate', { method: 'POST' });
+        if (!r.ok) {
+          const body = await r.text();
+          throw new Error('HTTP ' + r.status + (body ? ': ' + body : ''));
+        }
+        const data = await r.json();
+        window.location.href = data.redirect;
+      } catch (e) {
+        btn.disabled = false;
+        alert('could not start graduation chat: ' + e.message);
+      }
+    }
+
+    const INFOGUANA_EXPORT_MODELS = [
+      'claude-opus-4-7',
+      'claude-sonnet-4-6',
+      'claude-sonnet-4-5',
+      'claude-haiku-4-5',
+      'opus',
+      'sonnet',
+      'haiku',
+    ];
+    const INFOGUANA_EXPORT_DEFAULT_MODEL = 'claude-sonnet-4-6';
+
+    function infoguanaPickExportModel() {
+      return new Promise((resolve) => {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4';
+        backdrop.innerHTML = `
+          <div class="bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-full max-w-sm p-5 space-y-4">
+            <div>
+              <div class="text-sm font-medium text-slate-200">Export with which model?</div>
+              <div class="text-xs text-slate-500 mt-1">Synthesis runs <code class="text-slate-400">claude -p</code> with this model.</div>
+            </div>
+            <select class="w-full bg-slate-900 border border-slate-700 rounded-md text-sm text-slate-200 px-2 py-2 focus:outline-none focus:border-slate-500">
+              ${INFOGUANA_EXPORT_MODELS.map((m) =>
+                `<option value="${m}"${m === INFOGUANA_EXPORT_DEFAULT_MODEL ? ' selected' : ''}>${m}</option>`
+              ).join('')}
+            </select>
+            <div class="flex justify-end gap-2">
+              <button type="button" data-act="cancel" class="px-3 py-1.5 rounded-lg text-sm text-slate-300 hover:bg-slate-800">Cancel</button>
+              <button type="button" data-act="ok" class="px-3 py-1.5 rounded-lg text-sm bg-indigo-500 hover:bg-indigo-400 text-white">Export</button>
+            </div>
+          </div>
+        `;
+        const sel = backdrop.querySelector('select');
+        const finish = (val) => {
+          document.removeEventListener('keydown', onKey);
+          backdrop.remove();
+          resolve(val);
+        };
+        const onKey = (e) => {
+          if (e.key === 'Escape') finish(null);
+          else if (e.key === 'Enter') finish(sel.value);
+        };
+        backdrop.addEventListener('click', (e) => {
+          if (e.target === backdrop) finish(null);
+        });
+        backdrop.querySelector('[data-act="cancel"]').addEventListener('click', () => finish(null));
+        backdrop.querySelector('[data-act="ok"]').addEventListener('click', () => finish(sel.value));
+        document.addEventListener('keydown', onKey);
+        document.body.appendChild(backdrop);
+        sel.focus();
+      });
+    }
+
+    async function infoguanaExport(noteId, btn) {
+      const model = await infoguanaPickExportModel();
+      if (!model) return;
+
+      const original = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '…';
+      try {
+        const fd = new FormData();
+        fd.append('model', model);
+        const r = await fetch('/notes/' + noteId + '/export', {
+          method: 'POST', body: fd,
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const blob = await r.blob();
+        const cd = r.headers.get('Content-Disposition') || '';
+        const m = /filename="([^"]+)"/.exec(cd);
+        const name = m ? m[1] : ('plan-' + noteId + '.md');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('export failed: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = original;
+      }
+    }
+
+    async function infoguanaShowHistory(noteId) {
+      const modal = document.getElementById('history-modal');
+      const body = document.getElementById('history-modal-body');
+      const titleId = document.getElementById('history-modal-id');
+      titleId.textContent = '#' + noteId;
+      body.innerHTML = '<div class="text-slate-500 text-sm py-8 text-center">loading…</div>';
+      modal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      try {
+        const r = await fetch('/notes/' + noteId + '/history/panel');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        body.innerHTML = await r.text();
+      } catch (e) {
+        body.innerHTML = '<div class="text-rose-300 text-sm py-8 text-center">load failed: ' + e.message + '</div>';
+      }
+    }
+    function infoguanaCloseHistory() {
+      const modal = document.getElementById('history-modal');
+      modal.classList.add('hidden');
+      document.body.style.overflow = '';
+      document.getElementById('history-modal-body').innerHTML = '';
+    }
+
+    async function infoguanaDelete(noteId, btn) {
+      btn.disabled = true;
+      btn.textContent = 'deleting…';
+      try {
+        const r = await fetch('/notes/' + noteId, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const card = document.getElementById('note-' + noteId);
+        if (card) card.remove();
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'delete';
+        alert('delete failed: ' + e.message);
+      }
+    }
+
+    // Markdown rendering for chat bubbles. Called on page load + after every
+    // HTMX swap so newly streamed assistant messages render.
+    function infoguanaRenderMarkdown(el) {
+      if (!el || el.dataset.rendered === '1') return;
+      // Only render bubbles that explicitly opt in via data-md (i.e. chat
+      // stream bubbles built by JS). Server-rendered note cards already
+      // contain sanitized HTML and must be left alone.
+      if (!el.hasAttribute('data-md')) return;
+      if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return;
+      const raw = el.getAttribute('data-md') || '';
+      const html = DOMPurify.sanitize(marked.parse(raw, { breaks: true, gfm: true }));
+      el.innerHTML = html;
+      el.dataset.rendered = '1';
+    }
+    function infoguanaRenderAllMarkdown(root) {
+      (root || document).querySelectorAll('.markdown-body[data-md]:not([data-rendered="1"])').forEach(infoguanaRenderMarkdown);
+    }
+    document.addEventListener('DOMContentLoaded', () => infoguanaRenderAllMarkdown());
+    document.body.addEventListener('htmx:afterSwap', () => infoguanaRenderAllMarkdown());
+  </script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased">
+  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
+    <div class="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+      <a href="/" class="font-semibold tracking-tight text-lg">infoguana</a>
+      <nav class="flex gap-4 text-sm text-slate-400">
+        <a href="/capture" class="hover:text-slate-100">capture</a>
+        <a href="/agenda" class="hover:text-slate-100">agenda</a>
+        <a href="/projects" class="hover:text-slate-100">projects</a>
+        <a href="/browse" class="hover:text-slate-100">browse</a>
+        <a href="/chat" class="hover:text-slate-100">chat</a>
+      </nav>
+    </div>
+  </header>
+  <main class="{% block main_class %}max-w-2xl mx-auto px-4 py-6{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div
+    id="lightbox"
+    class="hidden fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4"
+    onclick="if (event.target === this) infoguanaLightboxClose()"
+  >
+    <button
+      type="button"
+      aria-label="close"
+      onclick="infoguanaLightboxClose()"
+      class="absolute top-4 right-4 w-10 h-10 rounded-full bg-slate-900/80 hover:bg-slate-800 text-slate-200 text-xl leading-none flex items-center justify-center"
+    >×</button>
+    <img src="" class="max-w-full max-h-full object-contain rounded-lg" alt="">
+  </div>
+
+  <div
+    id="history-modal"
+    class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-start justify-center p-4 overflow-y-auto"
+    onclick="if (event.target === this) infoguanaCloseHistory()"
+  >
+    <div class="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-xl shadow-xl my-8">
+      <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <span class="text-slate-300 text-sm font-medium">history</span>
+          <span id="history-modal-id" class="text-slate-500 text-sm font-mono"></span>
+        </div>
+        <button
+          type="button"
+          aria-label="close"
+          onclick="infoguanaCloseHistory()"
+          class="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 active:bg-slate-700 text-lg leading-none flex items-center justify-center"
+        >×</button>
+      </div>
+      <div id="history-modal-body" class="p-4"></div>
+    </div>
+  </div>
+</body>
+</html>

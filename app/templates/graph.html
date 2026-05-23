@@ -1,0 +1,2020 @@
+{% extends "base.html" %}
+{% block title %}graph · infoguana{% endblock %}
+{% block content %}
+<style>
+  .graph-wrap {
+    position: fixed;
+    top: 57px; /* header height */
+    left: 0;
+    right: 0;
+    bottom: 0;
+  }
+  #graph-svg { width: 100%; height: 100%; cursor: grab; }
+  #graph-svg:active { cursor: grabbing; }
+  .graph-link { stroke-linecap: round; fill: none; }
+  /* Hover/active drop-shadow on the *group* (not .node-shape) so it
+     doesn't override the SVG `filter="url(#aura-...)"` set on the
+     shape itself — CSS `filter` would replace the aura wholesale. */
+  .graph-node:hover,
+  .graph-node.active,
+  .graph-node.emphasized {
+    filter: drop-shadow(0 0 8px rgba(255,255,255,0.45));
+  }
+  /* Scale-on-hover for the visible shape. Diamonds are drawn as a
+     pre-rotated path so no SVG `transform` attribute is in play —
+     CSS `transform: scale` composes cleanly without the shape twisting.
+     The blocker scales in lockstep so lines stay occluded under the
+     enlarged silhouette. */
+  .graph-node .node-shape,
+  .graph-node .node-blocker {
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: transform 180ms ease-out;
+  }
+  .graph-node:hover .node-shape,
+  .graph-node:hover .node-blocker,
+  .graph-node.emphasized .node-shape,
+  .graph-node.emphasized .node-blocker {
+    transform: scale(1.18);
+  }
+  /* Halo rings around an emphasized linked note transition via CSS so
+     they share the browser's paint timing with the node-shape's scale —
+     d3 attribute transitions take a setup frame and noticeably lag. */
+  circle.edge-halo {
+    transition: r 180ms ease-out, stroke-width 180ms ease-out, stroke-opacity 180ms ease-out;
+  }
+  /* Shape-aura scales with its node when the node is emphasized — same
+     1.18× / 180ms ease-out as .node-shape so they pulse out together.
+     Position lives on the parent <g>, so this CSS transform composes
+     cleanly with the SVG translate. */
+  .shape-aura {
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: transform 180ms ease-out;
+  }
+  .shape-aura.emphasized {
+    transform: scale(1.18);
+  }
+  /* Hover halo groups crossfade via a CSS opacity transition rather than
+     d3's named transitions — d3 same-name transitions on the same element
+     interrupt each other (so an interrupted fade-in starts the fade-out
+     from a low opacity, making the ramp-down barely visible). With CSS,
+     the outgoing group's `.visible` class is removed and it fades on its
+     own timeline while the incoming group fades in independently. */
+  g.hover-halo {
+    opacity: 0;
+    transition: opacity 220ms ease;
+  }
+  g.hover-halo.visible {
+    opacity: 1;
+  }
+  .node-label {
+    fill: #cbd5e1;
+    font-size: 10px;
+    pointer-events: none;
+    paint-order: stroke;
+    stroke: #0b1220;
+    stroke-width: 3px;
+    stroke-linejoin: round;
+  }
+  .graph-tip {
+    position: fixed;
+    pointer-events: none;
+    background: rgba(15,23,42,0.95);
+    border: 1px solid #334155;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.4;
+    max-width: 340px;
+    z-index: 40;
+    backdrop-filter: blur(4px);
+  }
+  /* Pinned tooltip sits in a fixed corner so the cursor never has to
+     leave the node to read it — bumped 30% larger so it's comfortable
+     to read at the edge of the viewport instead of right next to gaze. */
+  .graph-tip.pinned {
+    font-size: 15.6px;
+    max-width: 442px;
+    padding: 7.8px 13px;
+  }
+  .node-panel {
+    position: fixed;
+    right: 12px;
+    top: 70px;
+    bottom: 12px;
+    width: min(420px, 90vw);
+    background: rgba(15,23,42,0.95);
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    padding: 14px;
+    overflow-y: auto;
+    z-index: 30;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+  .legend {
+    position: fixed;
+    left: 12px;
+    bottom: 12px;
+    background: rgba(15,23,42,0.85);
+    border: 1px solid #1f2937;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 11px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    z-index: 20;
+    max-width: calc(100vw - 24px);
+  }
+  .legend span.dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; margin-right: 4px; }
+  .legend span.diamond { width: 8px; height: 8px; transform: rotate(45deg); display: inline-block; margin-right: 4px; }
+  .legend span.triangle { width: 9px; height: 9px; clip-path: polygon(50% 0%, 100% 100%, 0% 100%); display: inline-block; margin-right: 4px; }
+  .legend button {
+    display: inline-flex; align-items: center;
+    padding: 2px 6px;
+    border-radius: 6px;
+    color: #cbd5e1;
+  }
+  .legend button.off { opacity: 0.35; }
+  .legend button:hover { background: rgba(255,255,255,0.05); }
+  /* Soft pulse on project-member auras when "breathe" is on. Animates
+     the whole node group's opacity so the colored aura filter and the
+     shape both fade together — gives a gentle "this cluster is alive"
+     hint without overwhelming the focal halo. */
+  @keyframes breathe-node {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.75; }
+  }
+  .graph-node.breathing > :not(.node-blocker),
+  .shape-aura.breathing {
+    animation: breathe-node 5.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  /* Focus mode: when a node is selected, dim everything not in the
+     related set so the focal cluster pops. Every node has a bg-colored
+     "blocker" shape drawn behind its visible shape so lines passing
+     under any node get occluded — keeps the look consistent for both
+     dim and lit states. The blocker stays opaque while the rest of
+     the node fades on dim. */
+  .graph-node > * {
+    transition: opacity 220ms ease;
+  }
+  /* Links transition stroke + filter too so the hover .emph effect
+     (gray→white + glow) ramps in instead of snapping. */
+  .graph-link {
+    transition: opacity 280ms ease, stroke 280ms ease, stroke-opacity 280ms ease, filter 280ms ease;
+  }
+  .node-blocker { pointer-events: none; }
+  .graph-node.dimmed > :not(.node-blocker) { opacity: 0.1; }
+  /* Tag dots are painted slate by nodeColor() so they don't shout in
+     the baseline view — but in focus mode the focal's tags read as
+     "this is what's defining the cluster", so we flip their fill to
+     white. Class is toggled in dimUnrelated alongside the dim/emph
+     bookkeeping; clearDim removes it on deselection. */
+  .graph-node.focus-tag .node-shape { fill: #ffffff; }
+  /* When a dimmed project node is also emphasized (hover-neighbor of
+     the focal), bring its label back to full opacity — the project
+     name is the only way to identify which dot is which from across
+     the graph, and a 0.1-opacity label is illegible. */
+  .graph-node.dimmed.emphasized > .node-label { opacity: 1; }
+  /* Project labels in the top layer mirror the dim state of their
+     project node — JS toggles the `.dimmed` class on the label in
+     sync with the node, but they un-dim whenever the node is also
+     emphasized (hovered or hover-neighbor) so the name stays legible
+     while the user is interrogating connections. */
+  text.project-label {
+    transition: opacity 220ms ease;
+  }
+  text.project-label.dimmed { opacity: 0.1; }
+  text.project-label.emphasized { opacity: 1; }
+  .graph-link.dimmed { opacity: 0.12; }
+  /* Synthetic global→project tendons (#357) — dashed, low-opacity
+     edges from each global note (project=None) to every project node
+     so the universality of globals reads visually instead of letting
+     them float as orphans. Pure render layer: not in the layout edge
+     set, doesn't count toward node degree. Hover on a global note
+     promotes its tendons to .emph so the user can flick through
+     globals and watch each one grab the whole graph. */
+  .graph-tendon {
+    fill: none;
+    /* Explicit baseline stroke (matches TYPE_COLORS.rule on the parent
+       group) so the .emph rule has a CSS value to interpolate *from* —
+       without this, the color comes from the parent's presentation
+       attribute and the transition snaps instantly to white. */
+    stroke: #f43f5e;
+    stroke-linecap: round;
+    stroke-dasharray: 3 5;
+    stroke-width: 0.7;
+    stroke-opacity: 0.39;
+    pointer-events: none;
+    transition: stroke 280ms ease, stroke-opacity 280ms ease, stroke-width 280ms ease, opacity 280ms ease;
+  }
+  /* Brighten the stroke from rose-500 → rose-300 in lockstep with the
+     width/opacity bump so the tendon visibly heats up from its faint
+     baseline as it scales. Stays in the rule color family so global
+     notes' tendons read as themselves, not as generic edges. */
+  .graph-tendon.emph { stroke: #fda4af; stroke-opacity: 1; stroke-width: 1.3; }
+  .graph-tendon.dimmed { opacity: 0.25; }
+  /* Real edges incident to the hovered note get the same emph treatment
+     so project-scoped notes (which have no synthetic tendons) still get
+     a visible "see my connections" effect on hover. We can't set an
+     absolute stroke-width here because the inline width varies by edge
+     weight (a heavy in_project edge is already 2.8 wide), so we lean on
+     color + opacity + a soft glow that reads on every weight. */
+  .graph-link.emph {
+    stroke: #f8fafc;
+    stroke-opacity: 1;
+    filter:
+      drop-shadow(0 0 3px rgba(248, 250, 252, 0.9))
+      drop-shadow(0 0 8px rgba(165, 180, 252, 0.55));
+  }
+  /* Project-scoped rules don't get synthetic tendons (those only emit
+     for globals), but their hovered edges should still read as
+     rule-colored — same rose family + glow as .graph-tendon.emph — so
+     the "this is a rule" affordance survives across scope. */
+  .graph-link.emph-rule {
+    stroke: #fda4af;
+    filter:
+      drop-shadow(0 0 3px rgba(253, 164, 175, 0.9))
+      drop-shadow(0 0 8px rgba(244, 63, 94, 0.55));
+  }
+</style>
+
+<div class="graph-wrap">
+  <svg id="graph-svg"></svg>
+</div>
+
+<div id="tooltip" class="graph-tip" style="display:none"></div>
+
+<div id="panel" class="node-panel" style="display:none">
+  <div class="flex justify-between items-center mb-2">
+    <h2 class="text-sm uppercase tracking-wider text-slate-400">selected</h2>
+    <button onclick="closePanel()" class="text-slate-400 hover:text-slate-100 w-6 h-6 leading-none">×</button>
+  </div>
+  <div id="panel-body"></div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script>
+  const TYPE_COLORS = {
+    idea:      '#818cf8', // indigo-400
+    memory:    '#34d399', // emerald-400
+    feedback:  '#fbbf24', // amber-400
+    feature:   '#c084fc', // purple-400
+    reference: '#38bdf8', // sky-400
+    plan:      '#fb923c', // orange-400 — in-flight intent that graduates
+    task:      '#f87171', // red-400   — tracked work that doesn't
+    rule:      '#f43f5e', // rose-500  — repo-specific standing constraint
+    unsorted:  '#94a3b8', // slate-400 (default gray)
+  };
+  const PROJECT_COLOR = '#f472b6';   // pink-400
+  const TAG_COLOR = '#64748b';       // slate-500
+  // Distinct hues for each typed link edge — drawn as halos around
+  // the selected note's neighbors so the user can see at a glance which
+  // notes are linked and how. Same palette as the chip border accent in
+  // _note_card.html (kept in sync by hand).
+  const EDGE_TYPE_COLORS = {
+    implements:       '#34d399', // emerald
+    caused_by:        '#f87171', // red
+    supersedes:       '#fbbf24', // amber
+    references:       '#38bdf8', // sky
+    bundled_with:     '#a78bfa', // violet
+    prerequisite_for: '#e879f9', // fuchsia
+  };
+
+  const svg = d3.select('#graph-svg');
+  const tooltip = document.getElementById('tooltip');
+  const panel = document.getElementById('panel');
+  const panelBody = document.getElementById('panel-body');
+  const legendEl = document.getElementById('legend');
+
+  let linkSel, tendonSel, nodeSel, zoomG, zoomBehavior, connectorLayer, haloLayer, hoverHaloLayer, auraLayer;
+  // Tracks which note's halos are currently drawn so we don't refetch
+  // when the same note re-selects (e.g. zoom-into-existing-selection).
+  let haloFetchToken = 0;
+  const hidden = new Set();
+  // The currently-open node — kept at outer scope so the synapse connector
+  // can be redrawn on zoom/resize without re-opening the panel.
+  let currentSelected = null;
+  // Latest related-id set for the current selection (refines after the
+  // typed-edge link fetch resolves). Cached so the focus/breathe toggles
+  // can re-apply without losing the linked-note neighbors that the
+  // sync recompute can't see.
+  let currentRelated = null;
+  // Promoted out of render() so chip-click handlers can resolve a target
+  // graph-node by id without a DOM round-trip.
+  let nodeById = new Map();
+  // Off by default — the static aura is enough most of the time; the
+  // pulse is opt-in from the legend and remembered per-browser.
+  let breathingEnabled = localStorage.getItem('graph.breathing') === '1';
+  // On by default — dims everything not related to the current selection
+  // so the focal cluster reads at a glance. Persisted per-browser.
+  let focusDimEnabled = localStorage.getItem('graph.focusDim') !== '0';
+  // On by default — render synthetic global→project tendons (#357).
+  // O(globals × projects) edges; the user can switch them off if the
+  // graph gets dense enough that the dashed clutter starts competing
+  // with real semantic edges. Persisted per-browser.
+  let tendonsEnabled = localStorage.getItem('graph.tendons') !== '0';
+  // Tooltip placement: 'mouse' follows the cursor (default), 'pinned'
+  // anchors to the top-left of the viewport so the preview never
+  // occludes the node you're inspecting. Persisted per-browser.
+  let tooltipPinned = localStorage.getItem('graph.tooltipPinned') === '1';
+
+  function isHidden(n) {
+    if (n.kind === 'note') return hidden.has('note:' + n.type);
+    if (n.kind === 'project') return hidden.has('project');
+    if (n.kind === 'tag') return hidden.has('tag');
+    return false;
+  }
+
+  function nodeColor(n) {
+    if (n.kind === 'project') return PROJECT_COLOR;
+    if (n.kind === 'tag') return TAG_COLOR;
+    return TYPE_COLORS[n.type] || '#94a3b8';
+  }
+
+  function nodeRadius(n) {
+    if (n.kind === 'project') return 11 + Math.sqrt(n.size || 0) * 1.8;
+    if (n.kind === 'tag') return 2 + (n.weight || 0.5) * 2;
+    return 5 + Math.sqrt(n.degree || 0) * 2;
+  }
+
+  // Visual shape bucket — color alone tops out at ~5 distinguishable hues
+  // at the 5px dot scale, so the lifecycle role (passive / deliverable /
+  // intent) gets an orthogonal channel via shape. Triangle→diamond reads
+  // as "plan graduates into feature" once shipped.
+  function nodeShape(n) {
+    if (n.kind === 'project') return 'diamond';
+    if (n.kind === 'tag') return 'circle';
+    if (n.type === 'feature') return 'diamond';
+    if (n.type === 'plan' || n.type === 'task') return 'triangle';
+    return 'circle';
+  }
+
+  // Smallest circle enclosing the rendered shape — halos and the server
+  // collision-relaxation pass key off this so non-circle nodes don't get
+  // their selection rings clipped at the corners.
+  function nodeEncloseRadius(n) {
+    const r = nodeRadius(n);
+    const shape = nodeShape(n);
+    // Diamond (rect rotated 45, side = 1.6r) — vertex at 0.8r * sqrt(2).
+    if (shape === 'diamond') return r * 0.8 * Math.SQRT2;
+    // Triangle (equilateral, vertices at distance r from origin).
+    if (shape === 'triangle') return r;
+    return r;
+  }
+
+  // Quadratic Bézier with constant magnitude, but bow direction flipped
+  // per-edge from a stable hash of the endpoints. The mix of left- and
+  // right-bowing arcs breaks the uniform parallel-drift of always biasing
+  // the same way and reads more like a neural swarm than decorative
+  // streamlines. Hash-derived (not random) so the same edge always bows
+  // the same way across redraws.
+  const CURVE_K = 0.18;
+  function edgeBowSign(d) {
+    const s = String(d.source.id) + '|' + String(d.target.id);
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    }
+    return (h & 1) ? 1 : -1;
+  }
+  function curvePath(d) {
+    const sx = d.source.x, sy = d.source.y;
+    const tx = d.target.x, ty = d.target.y;
+    const dx = tx - sx, dy = ty - sy;
+    const sign = edgeBowSign(d);
+    const mx = (sx + tx) / 2;
+    const my = (sy + ty) / 2;
+    const cx = mx - dy * CURVE_K * sign;
+    const cy = my + dx * CURVE_K * sign;
+    return `M${sx},${sy}Q${cx},${cy} ${tx},${ty}`;
+  }
+
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // Render a small due-date badge for a note dict from graph.json. Returns
+  // empty string for non-tracked-work, completed work, or missing date.
+  // Color thresholds mirror _note_card.html: today/overdue=rose, ≤7d=amber,
+  // >7d=neutral slate. Computed in the user's local TZ.
+  function dueBadgeHtml(n) {
+    if (!n || !n.due_date) return '';
+    if (n.status === 'complete') return '';
+    if (n.type !== 'plan' && n.type !== 'task') return '';
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const [y, m, d] = String(n.due_date).split('-').map(Number);
+    if (!y || !m || !d) return '';
+    const due = new Date(y, m - 1, d);
+    const days = Math.round((due - today) / 86400000);
+    let label;
+    if (days < -1) label = `${-days}d overdue`;
+    else if (days === -1) label = 'yesterday';
+    else if (days === 0) label = 'today';
+    else if (days === 1) label = 'tomorrow';
+    else label = `in ${days}d`;
+    let cls;
+    if (days <= 0) cls = 'bg-rose-500/20 text-rose-300 border border-rose-500/30';
+    else if (days <= 7) cls = 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
+    else cls = 'bg-slate-700/40 text-slate-300 border border-slate-600/40';
+    return `<span class="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] ${cls}">${escapeHtml(label)}</span>`;
+  }
+
+  // Render the tooltip preview as inline markdown — falls back to the
+  // raw escaped string if marked/DOMPurify haven't loaded yet.
+  function renderPreviewMd(s) {
+    const raw = String(s || '');
+    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+      return escapeHtml(raw);
+    }
+    return DOMPurify.sanitize(marked.parse(raw, { breaks: true, gfm: true }));
+  }
+
+  function showTip(ev, d) {
+    let html;
+    if (d.kind === 'note') {
+      const tags = d.tags && d.tags.length ? d.tags.map(t => '#' + t).join(' ') : '';
+      const proj = d.project ? `<span style="color:#a5b4fc">${d.project}</span> · ` : '';
+      const img = d.has_image ? '📷 ' : '';
+      const id = `<span style="color:#cbd5e1;font-family:ui-monospace,monospace">#${d.note_id}</span> · `;
+      html = `<div style="color:#94a3b8;font-size:10px;margin-bottom:2px">${id}${proj}${d.type}${tags ? ' · ' + tags : ''}</div><div class="markdown-body" style="color:#e2e8f0">${img}${renderPreviewMd(d.preview)}</div>`;
+    } else if (d.kind === 'project') {
+      html = `<div style="color:#f9a8d4;font-weight:600;margin-bottom:2px">project: ${escapeHtml(d.name)}</div><div style="color:#cbd5e1">${d.size} notes</div>`;
+    } else if (d.kind === 'tag') {
+      html = `<div style="color:#cbd5e1;margin-bottom:2px">#${escapeHtml(d.name)}</div><div style="color:#94a3b8;font-size:10px">${d.df} notes · idf ${d.idf}</div>`;
+    }
+    tooltip.style.display = 'block';
+    tooltip.classList.toggle('pinned', tooltipPinned);
+    if (tooltipPinned) {
+      // Anchor below the sticky navbar so the preview doesn't slide
+      // under it. Measure live since the header height depends on
+      // the current viewport (Tailwind `py-3` + content + border).
+      const header = document.querySelector('header');
+      const top = (header ? header.getBoundingClientRect().bottom : 0) + 8;
+      tooltip.style.left = '12px';
+      tooltip.style.top = top + 'px';
+    } else {
+      tooltip.style.left = (ev.clientX + 12) + 'px';
+      tooltip.style.top = (ev.clientY + 12) + 'px';
+    }
+    tooltip.innerHTML = html;
+  }
+  function hideTip() { tooltip.style.display = 'none'; }
+
+  // Keep ?focus=<id> in sync with the current selection so reloading
+  // the page lands on whatever the user is actually looking at. The
+  // value is the namespaced node id ("note:42", "project:infoguana",
+  // "tag:docker"). replaceState (not pushState) so chip-hopping doesn't
+  // pile up browser history entries.
+  function setFocusInUrl(id) {
+    const url = new URL(location.href);
+    if (id == null) {
+      url.searchParams.delete('focus');
+    } else {
+      url.searchParams.set('focus', id);
+    }
+    history.replaceState(null, '', url);
+  }
+
+  function loadNoteCard(noteId) {
+    panelBody.innerHTML = '<div class="text-slate-500 text-xs">loading…</div>';
+    panel.style.display = 'block';
+    fetch(`/notes/${noteId}/card?context=graph`).then(r => r.text()).then(h => {
+      panelBody.innerHTML = h;
+      infoguanaRenderAllMarkdown(panelBody);
+      // The card includes an HTMX-driven edit form (hx-post). innerHTML
+      // doesn't trigger htmx's auto-init, so without this the edit submit
+      // falls through to a default browser GET and the page reloads
+      // without the change ever reaching the server.
+      if (window.htmx) htmx.process(panelBody);
+    });
+  }
+
+  // After an edit form re-renders the card, sync the matching graph node's
+  // fill to the new type. Without this the user has to reload the page to
+  // see the dot change color from feature-blue to reference-grey.
+  panelBody.addEventListener('htmx:afterSwap', (ev) => {
+    const card = ev.target.closest('article[data-note-id]');
+    if (!card) return;
+    const noteId = card.getAttribute('data-note-id');
+    const newType = card.getAttribute('data-note-type');
+    const datum = nodeById.get('note:' + noteId);
+    if (!datum || datum.type === newType) return;
+    datum.type = newType;
+    nodeSel.filter(d => d.id === datum.id)
+      .select('.node-shape')
+      .attr('fill', nodeColor(datum));
+    // Keep the synapse connector colored to match if this is the open node.
+    if (currentSelected && currentSelected.id === datum.id) {
+      updateConnector();
+    }
+  });
+
+  // Delegated handler: chips rendered inside the note-card link panel
+  // navigate to other notes via /browse?id=N hrefs. In the graph side
+  // panel that would tear the user out of the graph, so intercept the
+  // click and swap the panel + selection to the linked note instead.
+  // Hovering a chip emphasizes the matching halo rings on the linked
+  // node so the user can trace chip → graph at a glance. mouseover/out
+  // (rather than mouseenter/leave) so a single delegated listener
+  // covers nested elements inside the chip.
+  panelBody.addEventListener('mouseover', ev => {
+    const chip = ev.target.closest('.link-chip');
+    if (chip) {
+      const id = chip.getAttribute('data-link-id');
+      if (id) emphasizeHalo(id, true);
+      return;
+    }
+    // Note-card tag spans: light up the matching tag node in the graph
+    // so the user can see where each #tag actually lives in the cluster.
+    // No-op when the tag isn't a node (e.g. legend filtered out, or
+    // sub-threshold tag pruned from the layout).
+    const tagEl = ev.target.closest('[data-graph-tag]');
+    if (tagEl) {
+      const tagNode = nodeById.get('tag:' + tagEl.getAttribute('data-graph-tag'));
+      if (tagNode) drawHoverHalo(tagNode, { glow: true });
+    }
+  });
+  panelBody.addEventListener('mouseout', ev => {
+    const chip = ev.target.closest('.link-chip');
+    if (chip) {
+      const id = chip.getAttribute('data-link-id');
+      if (id) emphasizeHalo(id, false);
+      return;
+    }
+    if (ev.target.closest('[data-graph-tag]')) {
+      clearHoverHalo();
+    }
+  });
+
+  panelBody.addEventListener('click', ev => {
+    // Note-card tag span: focus the matching tag node — same gesture as
+    // clicking the tag dot in the graph. No-op when the tag isn't a node
+    // (legend filtered out, or sub-threshold and pruned from the layout).
+    const tagEl = ev.target.closest('[data-graph-tag]');
+    if (tagEl) {
+      const tagNode = nodeById.get('tag:' + tagEl.getAttribute('data-graph-tag'));
+      if (tagNode) {
+        ev.preventDefault();
+        clearHoverHalo();
+        zoomToNode(tagNode, svg.node().clientWidth, svg.node().clientHeight);
+        openPanel(tagNode);
+      }
+      return;
+    }
+    const chip = ev.target.closest('.link-chip');
+    if (!chip) return;
+    const id = chip.getAttribute('data-link-id');
+    if (!id) return;
+    ev.preventDefault();
+    document.querySelectorAll('.graph-node.active').forEach(n => n.classList.remove('active'));
+    const targetData = nodeById.get('note:' + id);
+    if (targetData) {
+      const el = document.querySelector(`[data-id="note:${CSS.escape(id)}"]`);
+      if (el) el.classList.add('active');
+      currentSelected = targetData;
+      // Re-focus the graph on the chip's target so chip-navigation
+      // matches the gesture of clicking a node directly (zoom + panel).
+      zoomToNode(targetData, svg.node().clientWidth, svg.node().clientHeight);
+      updateConnector();
+    } else {
+      // Linked note isn't in the current graph (e.g. filtered out, or
+      // sub-threshold for similarity edges). Clear the connector — the
+      // panel still loads the card so the user can keep navigating.
+      currentSelected = null;
+      updateConnector();
+    }
+    loadNoteCard(id);
+    setFocusInUrl('note:' + id);
+    // Use targetData if it's in the current graph so the focal halo
+    // can render; otherwise fall back to a synthetic stub that just
+    // carries the note id (no halos in that case — node isn't visible).
+    if (targetData) {
+      applySelectionHalos(targetData);
+    } else {
+      clearHalos();
+      clearProjectMemberOutlines();
+    }
+  });
+
+  function closePanel() {
+    panel.style.display = 'none';
+    document.querySelectorAll('.graph-node.active').forEach(n => n.classList.remove('active'));
+    currentSelected = null;
+    updateConnector();
+    clearHalos();
+    clearProjectMemberOutlines();
+    clearDim();
+    currentRelated = null;
+    setFocusInUrl(null);
+    // Closing the panel reads as "leave focus mode" — zoom back out to
+    // the whole graph so the user sees the bigger picture again.
+    const visible = Array.from(nodeById.values()).filter(n => !isHidden(n));
+    if (visible.length) {
+      zoomToFit(visible, svg.node().clientWidth, svg.node().clientHeight, 40, 500);
+    }
+  }
+
+  function clearHalos() {
+    // Ramp existing halos out before removal so selection swaps cross-
+    // fade with the new halos appearing on the next selection — the
+    // two transitions overlap on the layer because the new circles are
+    // separate DOM elements appended after this transition starts.
+    if (haloLayer) {
+      haloLayer.selectAll('*')
+        .transition().duration(HOVER_FADE_MS)
+        .attr('stroke-opacity', 0)
+        .remove();
+    }
+    if (auraLayer) {
+      auraLayer.selectAll('*')
+        .transition().duration(HOVER_FADE_MS)
+        .attr('stroke-opacity', 0)
+        .remove();
+    }
+  }
+
+  // Transient halo drawn on the graph node corresponding to a hovered
+  // element in the side panel. Lives on its own layer so it composes
+  // with (and doesn't overwrite) the persistent selection halos.
+  //
+  // `opts.glow=true` draws the halo concentric with the node (radius
+  // matches the dot itself) so the blurred ring leaks outward as a
+  // soft aura — used for tiny tag dots where a separate ring outside
+  // the dot would dwarf it. Default: ring just outside the node, with
+  // a crisp inner stroke for definition.
+  // Fade duration for hover-driven halos and chip-emphasis bumps.
+  // Short enough that the UI still feels responsive but long enough
+  // that on/off doesn't snap — the ramp sells the "lighting up"
+  // metaphor instead of looking like a flicker.
+  const HOVER_FADE_MS = 180;
+  const HOVER_HALO_OPACITY = 0.95;
+
+  // CSS-driven crossfade. The outgoing halo loses `.visible` and fades
+  // out on its own timeline; the incoming halo gets appended without
+  // `.visible`, then on the next animation frame the class is added so
+  // the CSS transition runs from opacity 0 → 1. Outgoing groups are
+  // scheduled for DOM removal a bit longer than the fade duration so
+  // the fade-out plays out fully before the element vanishes.
+  let currentHoverHalo = null;
+  const HOVER_REMOVE_MS = 260; // a hair longer than the CSS transition
+
+  function startHaloFadeOut(group) {
+    if (!group) return;
+    const node = group.node();
+    if (!node) return;
+    node.classList.remove('visible');
+    setTimeout(() => {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    }, HOVER_REMOVE_MS);
+  }
+
+  function drawHoverHalo(n, opts = {}) {
+    if (!hoverHaloLayer) return;
+    startHaloFadeOut(currentHoverHalo);
+    const baseR = nodeEncloseRadius(n);
+    const r = opts.glow ? nodeRadius(n) : baseR + 5;
+    const halo = hoverHaloLayer.append('g').attr('class', 'hover-halo');
+    halo.append('circle')
+      .attr('cx', n.x).attr('cy', n.y).attr('r', r)
+      .attr('fill', 'none')
+      .attr('stroke', '#ffffff')
+      .attr('stroke-width', 5)
+      .attr('stroke-opacity', HOVER_HALO_OPACITY)
+      .attr('filter', 'url(#synapseGlow)');
+    if (!opts.glow) {
+      halo.append('circle')
+        .attr('cx', n.x).attr('cy', n.y).attr('r', r)
+        .attr('fill', 'none')
+        .attr('stroke', '#ffffff')
+        .attr('stroke-width', 0.75)
+        .attr('stroke-opacity', HOVER_HALO_OPACITY);
+    }
+    // Two rAFs so the browser commits the initial opacity:0 paint
+    // before the class flip kicks the transition. Without this the
+    // browser may collapse the two states and skip the animation.
+    const node = halo.node();
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => node.classList.add('visible'))
+    );
+    currentHoverHalo = halo;
+  }
+
+  function clearHoverHalo() {
+    startHaloFadeOut(currentHoverHalo);
+    currentHoverHalo = null;
+  }
+
+  // Shape-matching colored halo behind a lit node — replaces the
+  // per-element aura filter that ran on every member's `.node-shape`.
+  // Stroke-only path of the node's silhouette, lit by the shared
+  // synapseGlow blur, drawn into haloLayer so it auto-clears on the
+  // next selection swap and doesn't re-rasterize while the node breathes.
+  function drawShapeAura(n, color, opacity, sw = 3) {
+    if (!auraLayer) return;
+    // Don't paint an aura around a node that's been filtered out — the
+    // node-shape itself is display:none, so the aura would be a glow
+    // ring floating over empty canvas.
+    if (isHidden(n)) return;
+    const r = nodeRadius(n);
+    const shape = nodeShape(n);
+    const offset = sw / 2;
+    // Wrapper carries the translate so CSS scale on the inner shape
+    // doesn't fight an SVG transform attribute (the same trick the
+    // graph-node groups use for their shape children).
+    const wrap = auraLayer.append('g')
+      .attr('transform', `translate(${n.x},${n.y})`);
+    let el;
+    if (shape === 'diamond') {
+      const h = r * 0.8 * Math.SQRT2 + offset;
+      el = wrap.append('path')
+        .attr('d', `M0,${-h}L${h},0L0,${h}L${-h},0Z`);
+    } else if (shape === 'triangle') {
+      const tr = r + offset;
+      const a = tr * 0.866;
+      el = wrap.append('path')
+        .attr('d', `M0,${-tr}L${a},${tr * 0.5}L${-a},${tr * 0.5}Z`);
+    } else {
+      el = wrap.append('circle')
+        .attr('r', r + offset);
+    }
+    el.attr('class', 'shape-aura')
+      .attr('data-node-id', n.id)
+      .attr('fill', 'none')
+      .attr('stroke', color)
+      .attr('stroke-width', sw)
+      .attr('stroke-opacity', 0)
+      .attr('filter', 'url(#synapseGlow)')
+      .transition().duration(HOVER_FADE_MS)
+      .attr('stroke-opacity', opacity);
+  }
+
+  // White ring around the focal selection so the user always knows
+  // which node they're looking at, regardless of its type color. The
+  // wider blurred ring underneath provides the glow; the crisp line on
+  // top keeps the ring readable as a defined circle.
+  function drawFocalHalo(n) {
+    // Tag nodes are tiny dots — a ring outside them looks like a bullseye
+    // floating in space. Use the same concentric glow shape as the
+    // notecard-tag hover so the tag dot appears lit-up from within
+    // instead of encircled.
+    const glow = n.kind === 'tag';
+    const r = glow ? nodeRadius(n) : nodeEncloseRadius(n) + 5;
+    haloLayer.append('circle')
+      .attr('cx', n.x).attr('cy', n.y).attr('r', r)
+      .attr('fill', 'none')
+      .attr('stroke', '#ffffff')
+      .attr('stroke-width', 5)
+      .attr('stroke-opacity', 0)
+      .attr('filter', 'url(#synapseGlow)')
+      .transition().duration(HOVER_FADE_MS)
+      .attr('stroke-opacity', 0.95);
+    if (!glow) {
+      haloLayer.append('circle')
+        .attr('cx', n.x).attr('cy', n.y).attr('r', r)
+        .attr('fill', 'none')
+        .attr('stroke', '#ffffff')
+        .attr('stroke-width', 0.75)
+        .attr('stroke-opacity', 0)
+        .transition().duration(HOVER_FADE_MS)
+        .attr('stroke-opacity', 0.95);
+    }
+  }
+
+  // Draws all halos for the current selection: a white focal ring on
+  // the selected node, plus colored typed-edge rings on its neighbors
+  // (notes only — projects/tags get the focal halo only). Bumps a
+  // token so a stale fetch can't overwrite a fresher selection.
+  // Repaints every note's shape outline in the project color (with the
+  // shared glow filter) so a project selection visibly lights up its
+  // member cluster — the outlines themselves carry the color, not an
+  // overlay ring. clearProjectMemberOutlines() reverts to the default
+  // dark stroke; both are no-ops if the graph hasn't rendered yet.
+  function highlightProjectMembers(projectName) {
+    if (!nodeSel) return;
+    const memberTagNames = new Set();
+    nodeSel.filter(d => d.kind === 'note' && d.project === projectName)
+      .each(d => {
+        drawShapeAura(d, TYPE_COLORS[d.type] || TYPE_COLORS.unsorted, 0.7);
+        if (Array.isArray(d.tags)) for (const t of d.tags) memberTagNames.add(t);
+      });
+    for (const name of memberTagNames) {
+      const tag = nodeById.get('tag:' + name);
+      if (tag) drawShapeAura(tag, TAG_COLOR, 0.7);
+    }
+  }
+
+  // When a note is selected, light up every other note that shares at
+  // least one tag — same per-type color as the typed-link auras but
+  // muted so the explicit links still read as primary. Tag-shared
+  // notes were previously dim and invisible in focus mode; surfacing
+  // them lets the user see the wider context around the focal.
+  function highlightTagSharedNotes(noteDatum) {
+    if (!nodeSel || !noteDatum || !Array.isArray(noteDatum.tags) || !noteDatum.tags.length) return;
+    const tagSet = new Set(noteDatum.tags);
+    nodeSel.filter(d =>
+      d.kind === 'note'
+      && d.id !== noteDatum.id
+      && Array.isArray(d.tags)
+      && d.tags.some(t => tagSet.has(t))
+    ).each(d => {
+      drawShapeAura(d, TYPE_COLORS[d.type] || TYPE_COLORS.unsorted, 0.4);
+    });
+  }
+
+  // Mirror of highlightProjectMembers in the other direction: when a
+  // note is selected, light up the project diamond it belongs to so the
+  // user can trace a note back to its cluster home at a glance.
+  function highlightOwningProject(noteDatum) {
+    if (!nodeSel || !noteDatum || !noteDatum.project) return;
+    const proj = nodeById.get('project:' + noteDatum.project);
+    if (proj) drawShapeAura(proj, PROJECT_COLOR, 0.7);
+  }
+
+  // Tag selection: aura every note carrying this tag (per-type color)
+  // plus the projects those notes belong to, mirroring the related-set
+  // computed in computeRelatedIds for tag focus.
+  function highlightTagMembers(tagName) {
+    if (!nodeSel) return;
+    const projects = new Set();
+    nodeSel.filter(d => d.kind === 'note' && Array.isArray(d.tags) && d.tags.includes(tagName))
+      .each(d => {
+        if (d.project) projects.add(d.project);
+        drawShapeAura(d, TYPE_COLORS[d.type] || TYPE_COLORS.unsorted, 0.7);
+      });
+    for (const name of projects) {
+      const proj = nodeById.get('project:' + name);
+      if (proj) drawShapeAura(proj, PROJECT_COLOR, 0.7);
+    }
+  }
+
+  // Pulse every related node (except the focal — its halo carries the
+  // selection cue). Driven by the same related-set as the focus dim
+  // so breathing follows whatever's "linked" to the current selection.
+  function applyBreathing(relatedIds, focalId) {
+    if (!nodeSel) return;
+    if (!breathingEnabled || !relatedIds) {
+      nodeSel.classed('breathing', false);
+      if (auraLayer) auraLayer.selectAll('.shape-aura').classed('breathing', false);
+      return;
+    }
+    nodeSel.classed('breathing', d => d.id !== focalId && relatedIds.has(d.id));
+    if (auraLayer) {
+      auraLayer.selectAll('.shape-aura').each(function() {
+        const id = this.getAttribute('data-node-id');
+        d3.select(this).classed('breathing', id !== focalId && relatedIds.has(id));
+      });
+    }
+  }
+
+  function clearProjectMemberOutlines() {
+    if (!nodeSel) return;
+    nodeSel.select('.node-shape').attr('filter', null);
+    nodeSel.classed('breathing', false);
+  }
+
+  // Build the set of node ids "related" to the selection. For a project
+  // that's its members; for a tag, the notes carrying it; for a note,
+  // its owning project, its tags, and (if known) the linked notes from
+  // the typed-edge fetch. Always includes the focal node itself.
+  function computeRelatedIds(d, linkedNoteIds) {
+    const ids = new Set([d.id]);
+    if (d.kind === 'project') {
+      nodeById.forEach(n => {
+        if (n.kind !== 'note' || n.project !== d.name) return;
+        ids.add(n.id);
+        if (Array.isArray(n.tags)) {
+          for (const t of n.tags) ids.add('tag:' + t);
+        }
+      });
+    } else if (d.kind === 'tag') {
+      nodeById.forEach(n => {
+        if (n.kind !== 'note' || !Array.isArray(n.tags) || !n.tags.includes(d.name)) return;
+        ids.add(n.id);
+        if (n.project) ids.add('project:' + n.project);
+      });
+    } else if (d.kind === 'note') {
+      if (d.project) ids.add('project:' + d.project);
+      else {
+        // Global note (#357): tendons reach every project, so every
+        // project is "related" when a global is focused — otherwise
+        // focus-dim mutes the very edges that make the global global.
+        nodeById.forEach(n => { if (n.kind === 'project') ids.add(n.id); });
+      }
+      if (Array.isArray(d.tags) && d.tags.length) {
+        const tagSet = new Set(d.tags);
+        for (const t of d.tags) ids.add('tag:' + t);
+        // Notes that share at least one tag with the focal are "related"
+        // too — keeps them undimmed in focus mode and lets the aura pass
+        // below tint each one in its type color so shared-context notes
+        // surface around the focal cluster.
+        nodeById.forEach(n => {
+          if (n.kind !== 'note' || n.id === d.id) return;
+          if (!Array.isArray(n.tags)) return;
+          for (const t of n.tags) {
+            if (tagSet.has(t)) { ids.add(n.id); break; }
+          }
+        });
+      }
+      if (linkedNoteIds) {
+        for (const nid of linkedNoteIds) ids.add('note:' + nid);
+      }
+    }
+    return ids;
+  }
+
+  // Mirror each project node's dim/emphasized state onto its top-layer
+  // label so a dimmed-but-unaura'd project's name reads as background
+  // (matching the node), while a dimmed-but-emphasized project (hover
+  // target or neighbor) stays bright. Cheap class flip — runs after
+  // any place that changes .dimmed / .emphasized on the node.
+  function syncProjectLabels() {
+    if (!zoomG || !nodeSel) return;
+    const stateById = new Map();
+    nodeSel.each(function(n) {
+      if (n.kind !== 'project') return;
+      stateById.set(n.id, {
+        dimmed: this.classList.contains('dimmed'),
+        emphasized: this.classList.contains('emphasized'),
+      });
+    });
+    zoomG.selectAll('text.project-label').each(function() {
+      const id = this.getAttribute('data-node-id');
+      const s = stateById.get(id) || { dimmed: false, emphasized: false };
+      d3.select(this)
+        .classed('dimmed', s.dimmed)
+        .classed('emphasized', s.emphasized);
+    });
+  }
+
+  // For typed link edges, return the EDGE_TYPE_COLORS hue that the
+  // hover and focus paths both use to override the slate stroke. Two
+  // prefixes: "edge:<type>" (typed user-confirmed edges, the common
+  // case) and "link:<relation>" (legacy untyped links). null for any
+  // other kind (similar / has_tag / in_project) so the caller falls
+  // back to the default class styling.
+  function typedEdgeColor(l) {
+    if (!l || typeof l.kind !== 'string') return null;
+    const sep = l.kind.indexOf(':');
+    if (sep < 0) return null;
+    const prefix = l.kind.slice(0, sep);
+    if (prefix !== 'edge' && prefix !== 'link') return null;
+    return EDGE_TYPE_COLORS[l.kind.slice(sep + 1)] || null;
+  }
+  function typedEdgeFilter(l) {
+    const c = typedEdgeColor(l);
+    return c ? `drop-shadow(0 0 3px ${c}) drop-shadow(0 0 8px ${c})` : null;
+  }
+
+  // A link is "related" only if both endpoints are in the related set —
+  // an edge between two unrelated notes shouldn't read as part of the
+  // focal cluster even if it physically passes near the selection.
+  function dimUnrelated(relatedIds) {
+    if (!nodeSel || !linkSel) return;
+    if (!focusDimEnabled || !relatedIds) {
+      clearDim();
+      return;
+    }
+    const focalId = currentSelected ? currentSelected.id : null;
+    nodeSel.classed('dimmed', d => !relatedIds.has(d.id));
+    linkSel.classed('dimmed', l => {
+      const sid = typeof l.source === 'object' ? l.source.id : l.source;
+      const tid = typeof l.target === 'object' ? l.target.id : l.target;
+      return !relatedIds.has(sid) || !relatedIds.has(tid);
+    });
+    // Light up every incident edge in focus mode too — same .emph
+    // class the hover path uses. Typed-link edges still override the
+    // class color with their colored stroke + glow via the inline
+    // styles below; non-typed edges (similar / has_tag / in_project)
+    // get the thin white tendon, which is what calls out shared-tag
+    // and similar-content notes around the focal cluster.
+    //
+    // Shared-tag notes are 2 hops away (focal → tag ← other-note) and
+    // therefore have no direct edge to the focal — without the
+    // through-tag pass below, those notes would light up via aura but
+    // hover with no visible connection. Brightening the second hop
+    // (tag → other-note's has_tag edge) closes the visual gap.
+    const focalIsRule = currentSelected
+      && currentSelected.kind === 'note'
+      && currentSelected.type === 'rule';
+    const focalTagIds = new Set();
+    if (currentSelected && currentSelected.kind === 'note' && Array.isArray(currentSelected.tags)) {
+      for (const t of currentSelected.tags) focalTagIds.add('tag:' + t);
+    }
+    const isFocalTouch = l => {
+      if (!focalId) return false;
+      const sid = typeof l.source === 'object' ? l.source.id : l.source;
+      const tid = typeof l.target === 'object' ? l.target.id : l.target;
+      if (sid === focalId || tid === focalId) return true;
+      if (focalTagIds.size && (focalTagIds.has(sid) || focalTagIds.has(tid))) return true;
+      return false;
+    };
+    linkSel.classed('emph', isFocalTouch);
+    linkSel.classed('emph-rule', l => focalIsRule && isFocalTouch(l));
+    // Mark related tag nodes so the CSS rule paints them white — only
+    // the focal's tags qualify; dimmed tag dots stay slate.
+    nodeSel.classed('focus-tag', n =>
+      !!focalId && n.kind === 'tag' && relatedIds.has(n.id)
+    );
+    // Color typed-link edges that touch the focal by their relationship
+    // hue — same palette as the typed-edge halos and the hover effect,
+    // so the relationship type stays legible while the panel is open.
+    // Cleared in clearDim() when selection is dropped.
+    linkSel
+      .style('stroke', l => {
+        if (!focalId) return null;
+        const sid = typeof l.source === 'object' ? l.source.id : l.source;
+        const tid = typeof l.target === 'object' ? l.target.id : l.target;
+        if (sid !== focalId && tid !== focalId) return null;
+        return typedEdgeColor(l);
+      })
+      .style('filter', l => {
+        if (!focalId) return null;
+        const sid = typeof l.source === 'object' ? l.source.id : l.source;
+        const tid = typeof l.target === 'object' ? l.target.id : l.target;
+        if (sid !== focalId && tid !== focalId) return null;
+        return typedEdgeFilter(l);
+      });
+    if (tendonSel) {
+      tendonSel.classed('dimmed', t => {
+        const sid = typeof t.source === 'object' ? t.source.id : t.source;
+        const tid = typeof t.target === 'object' ? t.target.id : t.target;
+        return !relatedIds.has(sid) || !relatedIds.has(tid);
+      });
+    }
+    syncProjectLabels();
+  }
+
+  function clearDim() {
+    if (nodeSel) {
+      nodeSel.classed('dimmed', false);
+      nodeSel.classed('focus-tag', false);
+    }
+    if (linkSel) {
+      linkSel.classed('dimmed', false);
+      linkSel.classed('emph', false);
+      linkSel.classed('emph-rule', false);
+      // Strip the focal-time typed-color overrides so deselection
+      // returns the link to its baseline slate stroke.
+      linkSel.style('stroke', null).style('filter', null);
+    }
+    if (tendonSel) tendonSel.classed('dimmed', false);
+    syncProjectLabels();
+  }
+
+  async function applySelectionHalos(d) {
+    clearHalos();
+    clearProjectMemberOutlines();
+    if (!haloLayer || !d) { clearDim(); return; }
+    drawFocalHalo(d);
+    // Focal node fills the inside of the white halo with its type color
+    // — a filled circle at the halo's radius, blurred via synapseGlow.
+    // Drawn into haloLayer (above nodes) so the blocker doesn't occlude
+    // it — covers the whole halo interior including the node silhouette,
+    // tinting it in the type color so the focal reads as glowing from
+    // within the white ring.
+    const focalColor = d.kind === 'project' ? PROJECT_COLOR
+                     : d.kind === 'tag' ? TAG_COLOR
+                     : (TYPE_COLORS[d.type] || TYPE_COLORS.unsorted);
+    if (haloLayer) {
+      const focalR = d.kind === 'tag' ? nodeRadius(d) : nodeEncloseRadius(d) + 5;
+      haloLayer.insert('circle', ':first-child')
+        .attr('class', 'focal-aura')
+        .attr('cx', d.x).attr('cy', d.y).attr('r', focalR)
+        .attr('fill', focalColor)
+        .attr('fill-opacity', 0)
+        .attr('filter', 'url(#synapseGlow)')
+        .transition().duration(HOVER_FADE_MS)
+        .attr('fill-opacity', 0.45);
+    }
+    if (d.kind === 'project') highlightProjectMembers(d.name);
+    if (d.kind === 'note') {
+      highlightOwningProject(d);
+      highlightTagSharedNotes(d);
+    }
+    if (d.kind === 'tag') highlightTagMembers(d.name);
+    // Dim what we can resolve synchronously; for notes the link set
+    // refines after the fetch resolves below.
+    const initialRelated = computeRelatedIds(d, null);
+    currentRelated = initialRelated;
+    dimUnrelated(initialRelated);
+    applyBreathing(initialRelated, d.id);
+    if (d.kind !== 'note') return;
+
+    // Mellow "these are this note's tags" glow — same concentric-aura
+    // shape as drawHoverHalo({glow:true}) but at much lower opacity
+    // so the tag dots feel softly lit-up while the note is selected,
+    // without competing with the bright typed-edge halos. The hover
+    // halo (on hoverHaloLayer) layers on top when the user actually
+    // points at a tag, so the indication still escalates on hover.
+    if (Array.isArray(d.tags)) {
+      for (const tagName of d.tags) {
+        const tagNode = nodeById.get('tag:' + tagName);
+        if (!tagNode) continue;
+        haloLayer.append('circle')
+          .attr('cx', tagNode.x).attr('cy', tagNode.y)
+          .attr('r', nodeRadius(tagNode))
+          .attr('fill', 'none')
+          .attr('stroke', '#ffffff')
+          .attr('stroke-width', 5)
+          .attr('stroke-opacity', 0)
+          .attr('filter', 'url(#synapseGlow)')
+          .transition().duration(HOVER_FADE_MS)
+          .attr('stroke-opacity', 0.3);
+      }
+    }
+
+    const myToken = ++haloFetchToken;
+    let links;
+    try {
+      const r = await fetch(`/notes/${d.note_id}/links`);
+      if (!r.ok) return;
+      links = await r.json();
+    } catch (_) {
+      return;
+    }
+    if (myToken !== haloFetchToken) return; // selection changed mid-fetch
+    // Group by target so a node with multiple edge-types to the focal
+    // note gets one halo per type at progressively larger radii — keeps
+    // each color visible instead of letting the last-painted ring
+    // overwrite the others. Dedupe edge_types within a target (in/out
+    // of the same type counts once).
+    const byTarget = new Map();
+    for (const link of links) {
+      if (!byTarget.has(link.target_id)) byTarget.set(link.target_id, new Set());
+      byTarget.get(link.target_id).add(link.edge_type);
+    }
+    // Refine the dim + breathing sets now that we know the typed-edge
+    // neighbors.
+    const refinedRelated = computeRelatedIds(d, [...byTarget.keys()]);
+    currentRelated = refinedRelated;
+    dimUnrelated(refinedRelated);
+    applyBreathing(refinedRelated, d.id);
+    for (const targetId of byTarget.keys()) {
+      const target = nodeById.get('note:' + targetId);
+      if (target) drawShapeAura(target, TYPE_COLORS[target.type] || TYPE_COLORS.unsorted, 0.7);
+    }
+    for (const [targetId, typeSet] of byTarget) {
+      const target = nodeById.get('note:' + targetId);
+      if (!target) continue;
+      // Skip edge-halos pointed at filtered-out nodes — same reason as
+      // drawShapeAura's isHidden guard.
+      if (isHidden(target)) continue;
+      const baseR = nodeEncloseRadius(target);
+      let i = 0;
+      for (const edgeType of typeSet) {
+        const color = EDGE_TYPE_COLORS[edgeType];
+        if (!color) continue;
+        // Crisp ring + blurred ring at the same radius — the blur reads
+        // as a soft glow hugging the line. Multiple typed edges to the
+        // same target stack at 4px steps so each color stays visible.
+        // data-target-id + data-base-* let emphasizeHalo() find each
+        // circle by linked note and revert to the original geometry on
+        // mouseleave.
+        const ringR = baseR + 5 + i * 4;
+        haloLayer.append('circle')
+          .attr('class', 'edge-halo')
+          .attr('data-target-id', targetId)
+          .attr('data-base-r', ringR)
+          .attr('data-base-sw', 5)
+          .attr('cx', target.x).attr('cy', target.y)
+          .attr('r', ringR)
+          .attr('fill', 'none')
+          .attr('stroke', color)
+          .attr('stroke-width', 5)
+          .attr('stroke-opacity', 0)
+          .attr('filter', 'url(#synapseGlow)')
+          .transition().duration(HOVER_FADE_MS)
+          .attr('stroke-opacity', 0.95);
+        haloLayer.append('circle')
+          .attr('class', 'edge-halo')
+          .attr('data-target-id', targetId)
+          .attr('data-base-r', ringR)
+          .attr('data-base-sw', 0.75)
+          .attr('cx', target.x).attr('cy', target.y)
+          .attr('r', ringR)
+          .attr('fill', 'none')
+          .attr('stroke', color)
+          .attr('stroke-width', 0.75)
+          .attr('stroke-opacity', 0)
+          .transition().duration(HOVER_FADE_MS)
+          .attr('stroke-opacity', 0.95);
+        i++;
+      }
+    }
+  }
+
+  // Hovering a typed-edge chip in the side panel emphasizes the halo
+  // rings on the linked note's graph node — radius bumps out a few px
+  // and stroke-opacity goes to full so the visual link between the
+  // chip and its target reads at a glance. Reverts on mouseleave by
+  // reading the baked-in data-base-* values.
+  function emphasizeHalo(targetId, on) {
+    if (!haloLayer) return;
+    haloLayer.selectAll(`circle.edge-halo[data-target-id="${targetId}"]`)
+      .each(function() {
+        const c = d3.select(this);
+        const baseR = +c.attr('data-base-r');
+        const baseSw = +c.attr('data-base-sw');
+        // Set attrs directly — the CSS transition on circle.edge-halo
+        // handles the interpolation, keeping it in lockstep with the
+        // node-shape's CSS transform.
+        c.interrupt()
+          .attr('r', on ? baseR * 1.18 : baseR)
+          .attr('stroke-width', on ? baseSw * 1.18 : baseSw)
+          .attr('stroke-opacity', on ? 1 : 0.95);
+      });
+    // Mirror the chip-hover emphasis onto the target node itself —
+    // same scale + drop-shadow as graph-side hover so the chip and
+    // the node feel like the same gesture.
+    if (nodeSel) {
+      nodeSel.filter(n => n.id === 'note:' + targetId)
+        .classed('emphasized', on);
+    }
+    // And on the matching shape-aura so the colored halo around the
+    // node grows in lockstep too.
+    if (auraLayer) {
+      auraLayer.selectAll(`.shape-aura[data-node-id="note:${targetId}"]`)
+        .classed('emphasized', on);
+    }
+  }
+
+  // Hovering a note or project node lights up its incident edges so the
+  // user can see its connections at a glance. For globals (#357) the
+  // tendons heat up; for project-scoped notes the semantic edges glow;
+  // hovering a project node lights up every member's in_project edge plus
+  // every tendon reaching it from a global. Tag nodes still skipped —
+  // they connect to too many unrelated notes for the effect to be useful.
+  function emphasizeIncidentEdges(d, on) {
+    if (!d || (d.kind !== 'note' && d.kind !== 'project')) return;
+    const neighborIds = new Set();
+    if (tendonSel && !tendonSel.empty()) {
+      tendonSel.filter(t => {
+        const sid = typeof t.source === 'object' ? t.source.id : t.source;
+        const tid = typeof t.target === 'object' ? t.target.id : t.target;
+        // Tendons run global note → project. Match either endpoint so
+        // hovering a project lights up every global that reaches it.
+        if (sid === d.id) { neighborIds.add(tid); return true; }
+        if (tid === d.id) { neighborIds.add(sid); return true; }
+        return false;
+      }).classed('emph', on);
+    }
+    if (linkSel && !linkSel.empty()) {
+      // Rules paint their incident edges in the rule color family so a
+      // project-scoped rule's hover effect reads the same as a global
+      // rule's tendons (which only emit for globals).
+      const ruleHover = d.kind === 'note' && d.type === 'rule';
+      const incident = linkSel.filter(l => {
+        const sid = typeof l.source === 'object' ? l.source.id : l.source;
+        const tid = typeof l.target === 'object' ? l.target.id : l.target;
+        if (sid === d.id) { neighborIds.add(tid); return true; }
+        if (tid === d.id) { neighborIds.add(sid); return true; }
+        return false;
+      });
+      incident
+        .classed('emph', on)
+        .classed('emph-rule', on && ruleHover);
+      // Typed link edges override the class color with their own
+      // EDGE_TYPE_COLORS hue so the relationship type stays legible on
+      // hover — same palette dimUnrelated() uses on selection.
+      incident
+        .style('stroke', l => on ? typedEdgeColor(l) : null)
+        .style('filter', l => on ? typedEdgeFilter(l) : null);
+      // If a focal selection is active, hover-leave just nulled inline
+      // styles on edges that may also touch the focal — re-run the
+      // focus styling so the focal node's typed colors come back.
+      if (!on && currentSelected && currentRelated) {
+        dimUnrelated(currentRelated);
+      }
+    }
+    // Also flip `.emphasized` on the hovered node itself so styling
+     // that keys off the class (e.g. label opacity for dimmed-but-
+     // hovered project nodes) fires regardless of whether `:hover`
+     // is enough — and so the hovered node and its neighbors stay in
+     // sync for the same selectors.
+    if (nodeSel) {
+      nodeSel.filter(n => n.id === d.id || neighborIds.has(n.id))
+        .classed('emphasized', on);
+    }
+    syncProjectLabels();
+    // Shape-auras only exist on selection (drawn by applySelectionHalos),
+    // so the hovered node and its neighbors normally have nothing for
+    // `.emphasized` to scale. Draw a transient `.shape-aura.hover-aura`
+    // for each on enter and strip them on leave — selection-drawn auras
+    // stay put, and `.emphasized` keeps scaling them in lockstep.
+    // Include the focal `d.id` alongside neighbors so the hovered node
+    // also gets a fresh halo, not just the things it connects to.
+    const auraSubjects = new Set(neighborIds);
+    auraSubjects.add(d.id);
+    if (auraLayer) {
+      auraLayer.selectAll('.shape-aura')
+        .filter(function() {
+          return auraSubjects.has(this.getAttribute('data-node-id'));
+        })
+        .classed('emphasized', on);
+      if (on) {
+        for (const nid of auraSubjects) {
+          const subj = nodeById.get(nid);
+          if (!subj) continue;
+          const color = subj.kind === 'project' ? PROJECT_COLOR
+                      : subj.kind === 'tag' ? TAG_COLOR
+                      : (TYPE_COLORS[subj.type] || TYPE_COLORS.unsorted);
+          drawShapeAura(subj, color, 0.7);
+          // Tag the just-drawn aura so we can remove only hover-drawn
+          // ones on leave. drawShapeAura appends to auraLayer, so the
+          // last child for this node is ours.
+          auraLayer.selectAll(`.shape-aura[data-node-id="${nid}"]`)
+            .filter(function(_, i, nodes) { return i === nodes.length - 1; })
+            .classed('hover-aura', true)
+            .classed('emphasized', true);
+        }
+      } else {
+        auraLayer.selectAll('.shape-aura.hover-aura').remove();
+      }
+    }
+  }
+
+  // Synapse-style tendril from the selected node's screen position to the
+  // left edge of the side panel. Redraws on every zoom/pan and on window
+  // resize so the line stays stuck to the node like an axon. Hidden when
+  // the panel is closed or the selected node was filtered out via the
+  // legend.
+  function updateConnector() {
+    if (!connectorLayer) return;
+    connectorLayer.selectAll('*').remove();
+    if (!currentSelected || panel.style.display === 'none') return;
+    if (isHidden(currentSelected)) return;
+
+    const t = d3.zoomTransform(svg.node());
+    const sx = t.x + t.k * currentSelected.x;
+    const sy = t.y + t.k * currentSelected.y;
+    // Land the curve at the vertical midpoint of the panel's left edge
+    // so it visually meets the card head-on rather than sliding under
+    // the heading or the bottom margin.
+    const rect = panel.getBoundingClientRect();
+    const ex = rect.left;
+    const ey = rect.top + rect.height / 2;
+
+    // Same quadratic-bezier construction as the inter-node edges in
+    // curvePath() above (perpendicular offset = CURVE_K * length), so
+    // the tendril reads as one of the graph's own edges rather than a
+    // foreign UI line.
+    const dx = ex - sx, dy = ey - sy;
+    const mx = (sx + ex) / 2, my = (sy + ey) / 2;
+    const cx = mx - dy * CURVE_K;
+    const cy = my + dx * CURVE_K;
+    const path = `M${sx},${sy}Q${cx},${cy} ${ex},${ey}`;
+
+    // Linear gradient along the line — bright at the node end, fading
+    // toward the panel so the eye follows the curve into the card.
+    // The blur halo reuses the shared #synapseGlow filter set up in
+    // render() so we don't redefine it on every redraw.
+    // Tag connectors stay white so the dim TAG_COLOR doesn't disappear
+    // against the canvas; every other kind reads in its own node color
+    // so the tendril visibly emerges from the node it represents.
+    const color = currentSelected.kind === 'tag'
+      ? '#ffffff'
+      : nodeColor(currentSelected);
+    const defs = connectorLayer.append('defs');
+    const grad = defs.append('linearGradient')
+      .attr('id', 'synapseGrad')
+      .attr('gradientUnits', 'userSpaceOnUse')
+      .attr('x1', sx).attr('y1', sy)
+      .attr('x2', ex).attr('y2', ey);
+    grad.append('stop').attr('offset', '0%')
+      .attr('stop-color', color).attr('stop-opacity', 1);
+    grad.append('stop').attr('offset', '100%')
+      .attr('stop-color', color).attr('stop-opacity', 0.55);
+
+    // Blurred wide path → halo. Sits underneath the crisp line.
+    connectorLayer.append('path')
+      .attr('d', path)
+      .attr('stroke', color)
+      .attr('stroke-width', 6)
+      .attr('stroke-opacity', 0.7)
+      .attr('fill', 'none')
+      .attr('filter', 'url(#synapseGlow)');
+    // Crisp gradient line on top.
+    connectorLayer.append('path')
+      .attr('d', path)
+      .attr('stroke', 'url(#synapseGrad)')
+      .attr('stroke-width', 1.75)
+      .attr('fill', 'none');
+
+    // Terminal bead at the panel — same blur halo + crisp dot.
+    connectorLayer.append('circle')
+      .attr('cx', ex).attr('cy', ey).attr('r', 5)
+      .attr('fill', color).attr('opacity', 0.7)
+      .attr('filter', 'url(#synapseGlow)');
+    connectorLayer.append('circle')
+      .attr('cx', ex).attr('cy', ey).attr('r', 3.5)
+      .attr('fill', color)
+      .attr('stroke', '#0f172a').attr('stroke-width', 1);
+  }
+
+  function openPanel(d) {
+    document.querySelectorAll('.graph-node.active').forEach(n => n.classList.remove('active'));
+    const el = document.querySelector(`[data-id="${CSS.escape(d.id)}"]`);
+    if (el) el.classList.add('active');
+    panel.style.display = 'block';
+    currentSelected = d;
+    updateConnector();
+    applySelectionHalos(d);
+    setFocusInUrl(d.id);
+    if (d.kind === 'note') {
+      loadNoteCard(d.note_id);
+    }
+    if (d.kind === 'project') {
+      renderProjectPanel(d);
+    } else if (d.kind === 'tag') {
+      renderTagPanel(d);
+    }
+  }
+
+  // Project side panel: name + count, a "browse" link pre-filtered to
+  // this project, then preview cards for every note in the project.
+  // Hovering a preview halos the matching node in the graph; clicking
+  // refocuses on that note. Ordering comes from the server's
+  // build_context-style ranking (pending plans pinned, then
+  // reachability-decayed BFS) so the panel surfaces the same notion of
+  // "what matters in this project" the agents see — falls back to
+  // recency if the ranking endpoint hiccups.
+  async function renderProjectPanel(d) {
+    const projectNotes = Array.from(nodeById.values())
+      .filter(n => n.kind === 'note' && n.project === d.name);
+    const byId = new Map(projectNotes.map(n => [n.note_id, n]));
+
+    let ordered = projectNotes
+      .slice()
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    try {
+      const r = await fetch(`/projects/${encodeURIComponent(d.name)}/ranked-notes`);
+      if (r.ok) {
+        const ids = await r.json();
+        const seen = new Set();
+        const ranked = [];
+        for (const id of ids) {
+          const n = byId.get(id);
+          if (n && !seen.has(id)) { ranked.push(n); seen.add(id); }
+        }
+        // Append any project notes the server didn't include (e.g. just
+        // captured between graph.json and ranked-notes calls) so we
+        // never silently drop a note the user can see in the graph.
+        for (const n of projectNotes) {
+          if (!seen.has(n.note_id)) ranked.push(n);
+        }
+        ordered = ranked;
+      }
+    } catch (_) { /* keep recency fallback */ }
+
+    // Selection may have changed while the ranking fetch was in flight —
+    // bail out rather than overwriting a fresher panel.
+    if (currentSelected !== d) return;
+
+    const browseUrl = '/browse?project=' + encodeURIComponent(d.name);
+    const previews = ordered.map(n => `
+      <div class="note-preview-card cursor-pointer rounded-lg border border-slate-800 bg-slate-900/60 hover:bg-slate-800/80 hover:border-slate-700 transition px-3 py-2"
+           data-note-id="${n.note_id}">
+        <div class="text-[11px] text-slate-500 mb-0.5">
+          <span class="font-mono">#${n.note_id}</span> · ${escapeHtml(n.type)}${dueBadgeHtml(n)}
+        </div>
+        <div class="text-xs text-slate-300 line-clamp-3 break-words">${renderPreviewMd(n.preview)}</div>
+      </div>
+    `).join('');
+    panelBody.innerHTML = `
+      <div class="text-lg font-semibold text-pink-300 mb-2">${escapeHtml(d.name)}</div>
+      <div class="text-slate-400 text-sm mb-3">${d.size} notes in this project</div>
+      <a href="${browseUrl}" class="inline-block text-xs text-indigo-400 hover:text-indigo-300 mb-3">browse “${escapeHtml(d.name)}” →</a>
+      <div class="space-y-2">${previews}</div>
+    `;
+    wireNotePreviews();
+  }
+
+  // Tag side panel: same shape as the project panel — preview cards
+  // for every note carrying the tag, sorted by recency (no analog to
+  // build_context's project-seeded BFS for tags). Hover/click wiring
+  // reuses wireNotePreviews().
+  function renderTagPanel(d) {
+    const tagNotes = Array.from(nodeById.values())
+      .filter(n => n.kind === 'note'
+                   && Array.isArray(n.tags)
+                   && n.tags.includes(d.name))
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    const browseUrl = '/browse?tag=' + encodeURIComponent(d.name);
+    const previews = tagNotes.map(n => `
+      <div class="note-preview-card cursor-pointer rounded-lg border border-slate-800 bg-slate-900/60 hover:bg-slate-800/80 hover:border-slate-700 transition px-3 py-2"
+           data-note-id="${n.note_id}">
+        <div class="text-[11px] text-slate-500 mb-0.5">
+          <span class="font-mono">#${n.note_id}</span> · ${escapeHtml(n.type)}${dueBadgeHtml(n)}
+        </div>
+        <div class="text-xs text-slate-300 line-clamp-3 break-words">${renderPreviewMd(n.preview)}</div>
+      </div>
+    `).join('');
+    panelBody.innerHTML = `
+      <div class="text-lg font-semibold text-slate-200 mb-2">#${escapeHtml(d.name)}</div>
+      <div class="text-slate-400 text-sm mb-1">on ${d.df} notes</div>
+      <div class="text-slate-500 text-xs mb-3">idf ${d.idf}</div>
+      <a href="${browseUrl}" class="inline-block text-xs text-indigo-400 hover:text-indigo-300 mb-3">browse notes with this tag →</a>
+      <div class="space-y-2">${previews}</div>
+    `;
+    wireNotePreviews();
+  }
+
+  // Hover-halo wiring for the project panel preview list. Mouseenter
+  // draws a single white halo on the matching graph node; mouseleave
+  // clears it. Click refocuses the graph + panel on the note.
+  function wireNotePreviews() {
+    panelBody.querySelectorAll('.note-preview-card').forEach(el => {
+      const nid = el.getAttribute('data-note-id');
+      const target = nodeById.get('note:' + nid);
+      if (!target) return;
+      el.addEventListener('mouseenter', () => drawHoverHalo(target));
+      el.addEventListener('mouseleave', clearHoverHalo);
+      el.addEventListener('click', () => {
+        clearHoverHalo();
+        zoomToNode(target, svg.node().clientWidth, svg.node().clientHeight);
+        openPanel(target);
+      });
+    });
+  }
+
+  // Map a note type to the CSS class for its legend swatch — keeps the
+  // legend in sync with nodeShape() so a graph and its legend always agree.
+  function legendShapeClass(noteType) {
+    const shape = nodeShape({ kind: 'note', type: noteType });
+    return shape === 'circle' ? 'dot' : shape;
+  }
+
+  function buildLegend(nodes) {
+    legendEl.innerHTML = '';
+    const types = Array.from(new Set(nodes.filter(n => n.kind === 'note').map(n => n.type))).sort();
+    const noteSection = document.createElement('div');
+    noteSection.className = 'flex flex-wrap gap-1';
+    for (const t of types) {
+      const btn = document.createElement('button');
+      const cls = legendShapeClass(t);
+      btn.innerHTML = `<span class="${cls}" style="background:${TYPE_COLORS[t] || '#64748b'}"></span>${t}`;
+      btn.classList.toggle('off', hidden.has('note:' + t));
+      btn.onclick = () => toggleFilter('note:' + t, btn);
+      noteSection.appendChild(btn);
+    }
+    legendEl.appendChild(noteSection);
+
+    if (nodes.some(n => n.kind === 'project')) {
+      const sep = document.createElement('span'); sep.className = 'text-slate-700'; sep.textContent = '|'; legendEl.appendChild(sep);
+      const btn = document.createElement('button');
+      btn.innerHTML = `<span class="diamond" style="background:${PROJECT_COLOR}"></span>projects`;
+      btn.classList.toggle('off', hidden.has('project'));
+      btn.onclick = () => toggleFilter('project', btn);
+      legendEl.appendChild(btn);
+    }
+    if (nodes.some(n => n.kind === 'tag')) {
+      const sep = document.createElement('span'); sep.className = 'text-slate-700'; sep.textContent = '|'; legendEl.appendChild(sep);
+      const btn = document.createElement('button');
+      btn.innerHTML = `<span class="dot" style="background:${TAG_COLOR}"></span>tags`;
+      btn.classList.toggle('off', hidden.has('tag'));
+      btn.onclick = () => toggleFilter('tag', btn);
+      legendEl.appendChild(btn);
+    }
+
+    const sep2 = document.createElement('span'); sep2.className = 'text-slate-700'; sep2.textContent = '|'; legendEl.appendChild(sep2);
+    const breatheBtn = document.createElement('button');
+    breatheBtn.textContent = 'breathe';
+    breatheBtn.title = 'Pulse selected project + members with a soft fade';
+    breatheBtn.classList.toggle('off', !breathingEnabled);
+    breatheBtn.onclick = () => {
+      breathingEnabled = !breathingEnabled;
+      localStorage.setItem('graph.breathing', breathingEnabled ? '1' : '0');
+      breatheBtn.classList.toggle('off', !breathingEnabled);
+      // Reuse the cached related-set so the typed-edge neighbors from
+      // the last fetch don't get dropped on toggle.
+      if (currentSelected && currentRelated) {
+        applyBreathing(currentRelated, currentSelected.id);
+      } else if (nodeSel) {
+        nodeSel.classed('breathing', false);
+      }
+    };
+    legendEl.appendChild(breatheBtn);
+
+    const focusBtn = document.createElement('button');
+    focusBtn.textContent = 'focus';
+    focusBtn.title = 'Dim unrelated nodes when something is selected';
+    focusBtn.classList.toggle('off', !focusDimEnabled);
+    focusBtn.onclick = () => {
+      focusDimEnabled = !focusDimEnabled;
+      localStorage.setItem('graph.focusDim', focusDimEnabled ? '1' : '0');
+      focusBtn.classList.toggle('off', !focusDimEnabled);
+      // Reuse the cached related-set so the typed-edge neighbors from
+      // the last fetch don't get dropped on toggle.
+      if (currentSelected && currentRelated) dimUnrelated(currentRelated);
+      else clearDim();
+    };
+    legendEl.appendChild(focusBtn);
+
+    // Only surface the tendons toggle if there's at least one tendon
+    // to render — otherwise the button is a no-op affordance.
+    if (tendonSel && !tendonSel.empty()) {
+      const tendonsBtn = document.createElement('button');
+      tendonsBtn.innerHTML = `<span class="dot" style="background:${TYPE_COLORS.rule}"></span>tendons`;
+      tendonsBtn.title = 'Dashed lines from each global note to every project — shows where universality applies';
+      tendonsBtn.classList.toggle('off', !tendonsEnabled);
+      tendonsBtn.onclick = () => {
+        tendonsEnabled = !tendonsEnabled;
+        localStorage.setItem('graph.tendons', tendonsEnabled ? '1' : '0');
+        tendonsBtn.classList.toggle('off', !tendonsEnabled);
+        applyFilter();
+      };
+      legendEl.appendChild(tendonsBtn);
+    }
+
+    // Tooltip placement toggle — flips between mouse-follow and a
+    // fixed top-left anchor so previews never sit on top of the node
+    // the user is inspecting.
+    const tipBtn = document.createElement('button');
+    tipBtn.innerHTML = '<span class="dot" style="background:#cbd5e1"></span>pin tip';
+    tipBtn.title = 'Pin the hover preview to the top-left of the screen instead of following the cursor';
+    tipBtn.classList.toggle('off', !tooltipPinned);
+    tipBtn.onclick = () => {
+      tooltipPinned = !tooltipPinned;
+      localStorage.setItem('graph.tooltipPinned', tooltipPinned ? '1' : '0');
+      tipBtn.classList.toggle('off', !tooltipPinned);
+    };
+    legendEl.appendChild(tipBtn);
+  }
+
+  function toggleFilter(key, btn) {
+    if (hidden.has(key)) hidden.delete(key); else hidden.add(key);
+    btn.classList.toggle('off', hidden.has(key));
+    applyFilter();
+  }
+
+  function applyFilter() {
+    nodeSel.style('display', d => isHidden(d) ? 'none' : null);
+    linkSel.style('display', d => {
+      const sh = isHidden(d.source);
+      const th = isHidden(d.target);
+      return (sh || th) ? 'none' : null;
+    });
+    if (tendonSel) {
+      tendonSel.style('display', d => {
+        if (!tendonsEnabled) return 'none';
+        if (isHidden(d.source) || isHidden(d.target)) return 'none';
+        return null;
+      });
+    }
+    // Project labels live in their own top-most layer (above all halos)
+    // so they aren't children of `nodeSel` and need their own filter
+    // pass — otherwise toggling projects off in the legend leaves the
+    // names floating over an empty patch of canvas.
+    if (zoomG) {
+      zoomG.selectAll('text.project-label').style('display', function() {
+        const id = this.getAttribute('data-node-id');
+        const n = nodeById.get(id);
+        return n && isHidden(n) ? 'none' : null;
+      });
+    }
+    // Auras (auraLayer) and edge-halos (haloLayer) are painted into
+    // separate top layers and aren't children of nodeSel, so they
+    // need their own filter pass — otherwise toggling a kind off
+    // leaves disembodied glow rings floating where the hidden node
+    // used to be. Aura's data-node-id matches nodeById keys directly
+    // (e.g. "note:42"); edge-halo's data-target-id is the bare note
+    // id and needs the "note:" prefix.
+    if (auraLayer) {
+      auraLayer.selectAll('.shape-aura').style('display', function() {
+        const id = this.getAttribute('data-node-id');
+        const n = nodeById.get(id);
+        return n && isHidden(n) ? 'none' : null;
+      });
+    }
+    if (haloLayer) {
+      haloLayer.selectAll('circle.edge-halo').style('display', function() {
+        const tid = this.getAttribute('data-target-id');
+        const n = nodeById.get('note:' + tid);
+        return n && isHidden(n) ? 'none' : null;
+      });
+    }
+    updateConnector();
+  }
+
+  function render(data) {
+    const width = svg.node().clientWidth;
+    const height = svg.node().clientHeight;
+    svg.selectAll('*').remove();
+
+    zoomG = svg.append('g');
+    zoomBehavior = d3.zoom()
+      .scaleExtent([0.2, 4])
+      .on('zoom', ev => {
+        zoomG.attr('transform', ev.transform);
+        updateConnector();
+      });
+    svg.call(zoomBehavior);
+    // Connector lives outside zoomG so its endpoints stay in screen
+    // coordinates (the node end is projected through the zoom transform
+    // manually, the panel end is fixed to the viewport).
+    connectorLayer = svg.append('g')
+      .attr('class', 'connector-layer')
+      .attr('pointer-events', 'none');
+
+    if (!data.nodes.length) {
+      svg.append('text').attr('x', width/2).attr('y', height/2)
+        .attr('text-anchor','middle').attr('fill','#64748b').attr('font-size',14)
+        .text('no notes yet. capture something, then refresh.');
+      return;
+    }
+
+    const nodes = data.nodes;
+    nodeById = new Map(nodes.map(n => [n.id, n]));
+    const links = data.links
+      .map(l => ({...l, source: nodeById.get(l.source), target: nodeById.get(l.target)}))
+      .filter(l => l.source && l.target);
+
+    // Synthetic global→project tendons (#357). Drawn beneath linkSel so
+    // real semantic edges paint on top — tendons are decoration that
+    // signals "this global reaches everywhere", not graph structure.
+    const tendons = (data.tendons || [])
+      .map(t => ({...t, source: nodeById.get(t.source), target: nodeById.get(t.target)}))
+      .filter(t => t.source && t.target);
+
+    // Parent stroke intentionally omitted — color is owned by the
+     // .graph-tendon CSS rule so the .emph class has a stable computed
+     // value to transition from. With a parent presentation attribute
+     // in play, browsers can short-circuit the stroke transition.
+    tendonSel = zoomG.append('g')
+      .selectAll('path')
+      .data(tendons)
+      .enter().append('path')
+      .attr('class', 'graph-tendon')
+      .attr('d', curvePath);
+
+    linkSel = zoomG.append('g')
+      .attr('stroke', '#64748b')
+      .selectAll('path')
+      .data(links)
+      .enter().append('path')
+      .attr('class', 'graph-link')
+      .attr('stroke-width', d => d.kind === 'has_tag' ? 1.0 : 0.3 + d.weight * 2.5)
+      .attr('stroke-opacity', d => d.kind === 'has_tag' ? 0.45 : 0.08 + d.weight * 0.75)
+      .attr('d', curvePath);
+
+    // One-time SVG-level <defs> for filters that any layer can reuse —
+    // currently the gaussian glow shared by halos and the synapse
+    // connector. Kept at the SVG root so it survives connector clears.
+    if (svg.select('defs.shared').empty()) {
+      const sharedDefs = svg.append('defs').attr('class', 'shared');
+      const glow = sharedDefs.append('filter')
+        .attr('id', 'synapseGlow')
+        .attr('x', '-100%').attr('y', '-100%')
+        .attr('width', '300%').attr('height', '300%');
+      glow.append('feGaussianBlur').attr('stdDeviation', 1.85);
+      // Colored aura filters — one per note-type color, used to make
+      // project members visibly glow in their own color while keeping
+      // the dark stroke. SVG `filter` attribute can't accept a runtime
+      // color, so each tint is precomputed here and looked up by id.
+      // The flood color tints the source-alpha blur; the original shape
+      // is composited on top so the stroke + fill stay crisp.
+      const auraColors = { ...TYPE_COLORS, project: PROJECT_COLOR };
+      for (const [type, color] of Object.entries(auraColors)) {
+        const f = sharedDefs.append('filter')
+          .attr('id', 'aura-' + type)
+          .attr('x', '-100%').attr('y', '-100%')
+          .attr('width', '300%').attr('height', '300%');
+        f.append('feGaussianBlur')
+          .attr('in', 'SourceAlpha')
+          .attr('stdDeviation', 3)
+          .attr('result', 'blur');
+        f.append('feFlood')
+          .attr('flood-color', color)
+          .attr('flood-opacity', 1)
+          .attr('result', 'flood');
+        f.append('feComposite')
+          .attr('in', 'flood').attr('in2', 'blur')
+          .attr('operator', 'in')
+          .attr('result', 'glow');
+        const merge = f.append('feMerge');
+        merge.append('feMergeNode').attr('in', 'glow');
+        merge.append('feMergeNode').attr('in', 'SourceGraphic');
+      }
+    }
+
+    // Shape-auras live below nodes so the blockers occlude the inner
+    // half of each blurred ring — only the outer halo bleed shows past
+    // the silhouette, which reads as a soft glow hugging the node.
+    auraLayer = zoomG.append('g')
+      .attr('class', 'aura-layer')
+      .attr('pointer-events', 'none');
+
+    nodeSel = zoomG.append('g')
+      .selectAll('g')
+      .data(nodes, d => d.id)
+      .enter().append('g')
+      .attr('class', 'graph-node')
+      .attr('data-id', d => d.id)
+      .attr('transform', d => `translate(${d.x},${d.y})`)
+      .style('cursor', 'pointer')
+      .on('mousemove', showTip)
+      .on('mouseleave', hideTip)
+      .on('mouseenter.emph', (ev, d) => {
+        if (d.kind === 'note' && d.note_id != null) emphasizeHalo(d.note_id, true);
+      })
+      .on('mouseleave.emph', (ev, d) => {
+        if (d.kind === 'note' && d.note_id != null) emphasizeHalo(d.note_id, false);
+      })
+      .on('mouseenter.tendons', (ev, d) => emphasizeIncidentEdges(d, true))
+      .on('mouseleave.tendons', (ev, d) => emphasizeIncidentEdges(d, false))
+      .on('click', (ev, d) => {
+        ev.stopPropagation();
+        // Tear down any hover-state on the clicked node before zooming.
+        // Once zoomToNode shifts the viewport the cursor often ends up
+        // still inside the same <g>, so the browser never fires
+        // mouseleave — which would leave the hover-auras and
+        // .emphasized classes stuck on every "neighbor" of the click
+        // target. Calling this explicitly cleans the slate.
+        emphasizeIncidentEdges(d, false);
+        // Re-center and zoom on the clicked node before opening the
+        // panel so the synapse connector has a clear, predictable run
+        // from the focal node to the panel edge.
+        zoomToNode(d, svg.node().clientWidth, svg.node().clientHeight);
+        openPanel(d);
+      });
+
+    nodeSel.each(function(d) {
+      const g = d3.select(this);
+      const r = nodeRadius(d);
+      const shape = nodeShape(d);
+      // Hidden bg-colored backdrop (matches body bg-slate-950 #020617).
+      // Always first in the group so subsequent shapes paint on top of
+      // it. Mirrors the visible shape geometry exactly so the occluded
+      // region matches the silhouette — a circle blocker behind a
+      // diamond reads as a weird halo.
+      const bf = '#020617';
+      if (shape === 'diamond') {
+        const h = r * 0.8 * Math.SQRT2;
+        g.append('path')
+          .attr('class', 'node-blocker')
+          .attr('d', `M0,${-h}L${h},0L0,${h}L${-h},0Z`)
+          .attr('fill', bf);
+      } else if (shape === 'triangle') {
+        const a = r * 0.866;
+        g.append('path')
+          .attr('class', 'node-blocker')
+          .attr('d', `M0,${-r}L${a},${r * 0.5}L${-a},${r * 0.5}Z`)
+          .attr('fill', bf);
+      } else {
+        g.append('circle')
+          .attr('class', 'node-blocker')
+          .attr('r', r)
+          .attr('fill', bf);
+      }
+      if (d.kind === 'project') {
+        const h = r * 0.8 * Math.SQRT2;
+        g.append('path')
+          .attr('class','node-shape')
+          .attr('d', `M0,${-h}L${h},0L0,${h}L${-h},0Z`)
+          .attr('fill', nodeColor(d))
+          .attr('stroke', '#0f172a').attr('stroke-width', 1.5);
+        g.append('text').attr('class','node-label')
+          .attr('y', r + 12).attr('text-anchor','middle').text(d.name);
+      } else if (d.kind === 'tag') {
+        // Small unlabeled dots — names live in the tooltip + side panel.
+        g.append('circle')
+          .attr('class','node-shape')
+          .attr('r', r)
+          .attr('fill', nodeColor(d))
+          .attr('stroke', '#0f172a').attr('stroke-width', 1)
+          .attr('fill-opacity', 0.7);
+      } else if (shape === 'diamond') {
+        const h = r * 0.8 * Math.SQRT2;
+        g.append('path')
+          .attr('class','node-shape')
+          .attr('d', `M0,${-h}L${h},0L0,${h}L${-h},0Z`)
+          .attr('fill', nodeColor(d))
+          .attr('stroke', '#0f172a').attr('stroke-width', 1.5);
+      } else if (shape === 'triangle') {
+        // Equilateral, point-up — reads as "intent / aiming forward".
+        // sqrt(3)/2 ≈ 0.866 so vertices land at distance r from origin.
+        const a = r * 0.866;
+        g.append('path')
+          .attr('class','node-shape')
+          .attr('d', `M0,${-r}L${a},${r * 0.5}L${-a},${r * 0.5}Z`)
+          .attr('fill', nodeColor(d))
+          .attr('stroke', '#0f172a').attr('stroke-width', 1.5);
+      } else {
+        g.append('circle')
+          .attr('class','node-shape')
+          .attr('r', r)
+          .attr('fill', nodeColor(d))
+          .attr('stroke', '#0f172a').attr('stroke-width', 1.5);
+      }
+    });
+
+    // Promote project labels to render on top of every other node and edge.
+    nodeSel.filter(d => d.kind === 'project').raise();
+
+    // Halos render above all nodes — selecting a busy node otherwise
+    // gets its rings clipped by the surrounding cluster. Drawn last
+    // (= painted last) and pointer-events:none so clicks still hit the
+    // underlying node, not the halo.
+    haloLayer = zoomG.append('g')
+      .attr('class', 'halo-layer')
+      .attr('pointer-events', 'none');
+    // Separate layer for transient hover halos (project preview list)
+    // so they don't get cleared by selection-halo redraws and vice versa.
+    hoverHaloLayer = zoomG.append('g')
+      .attr('class', 'hover-halo-layer')
+      .attr('pointer-events', 'none');
+
+    // Project name labels live in their own top-most layer so they
+    // paint over halos, hover-auras, and every other graph element —
+    // names are the only way to identify a project at a glance, so they
+    // can't be obscured. Mirrors the position of the in-group label
+    // (y = node center + r + 12) and the same .node-label styling.
+    const projectLabelLayer = zoomG.append('g')
+      .attr('class', 'project-label-layer')
+      .attr('pointer-events', 'none');
+    for (const n of nodes) {
+      if (n.kind !== 'project') continue;
+      projectLabelLayer.append('text')
+        .attr('class', 'node-label project-label')
+        .attr('data-node-id', n.id)
+        .attr('x', n.x)
+        .attr('y', n.y + nodeRadius(n) + 12)
+        .attr('text-anchor', 'middle')
+        .text(n.name);
+    }
+    // Strip the duplicate label that lives inside each project node
+    // group — leaving it would render the name twice (once dim under
+    // halos, once bright on top) and shimmer when the dim toggles.
+    nodeSel.filter(d => d.kind === 'project').selectAll('text.node-label').remove();
+
+    buildLegend(nodes);
+    applyFilter();
+    zoomToFit(nodes.filter(n => !isHidden(n)), width, height);
+
+    // ?focus=<id> — landed here from a "view in graph" action or by
+    // refreshing the page on a focused selection. The value is a
+    // namespaced node id ("note:42", "project:infoguana", "tag:docker"); a
+    // bare number is treated as a note id for backwards compatibility
+    // with older links.
+    const focusParam = new URLSearchParams(location.search).get('focus');
+    if (focusParam) {
+      const focusId = focusParam.includes(':') ? focusParam : ('note:' + focusParam);
+      const focusNode = nodeById.get(focusId);
+      if (focusNode) {
+        zoomToNode(focusNode, width, height);
+        openPanel(focusNode);
+      }
+    }
+  }
+
+  function zoomToNode(n, width, height, scale = 1.6) {
+    if (!zoomBehavior) return;
+    const tx = width / 2 - scale * n.x;
+    const ty = height / 2 - scale * n.y;
+    svg.transition().duration(500).call(
+      zoomBehavior.transform,
+      d3.zoomIdentity.translate(tx, ty).scale(scale),
+    );
+  }
+
+  function zoomToFit(nodes, width, height, padding = 40, duration = 0) {
+    if (!nodes.length || !zoomBehavior) return;
+    const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const w = maxX - minX || 1, h = maxY - minY || 1;
+    const scale = Math.min(
+      (width - padding * 2) / w,
+      (height - padding * 2) / h,
+      4,
+    );
+    const tx = width / 2 - scale * (minX + maxX) / 2;
+    const ty = height / 2 - scale * (minY + maxY) / 2;
+    const target = d3.zoomIdentity.translate(tx, ty).scale(scale);
+    if (duration > 0) {
+      svg.transition().duration(duration).call(zoomBehavior.transform, target);
+    } else {
+      svg.call(zoomBehavior.transform, target);
+    }
+  }
+
+  // Panel position depends on viewport size — keep the connector
+  // anchored to the panel's left edge as the window resizes.
+  window.addEventListener('resize', updateConnector);
+
+  fetch('/graph.json')
+    .then(r => r.json())
+    .then(render)
+    .catch(e => {
+      svg.append('text').attr('x', '50%').attr('y', '50%').attr('text-anchor','middle')
+        .attr('fill','#ef4444').text('failed to load graph: ' + e.message);
+    });
+
+</script>
+{% endblock %}

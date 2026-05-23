@@ -51,9 +51,25 @@ If the user wants the file *committed to the repo* instead (so collaborators who
    - If present: read it, diff against the proposed new content, show the user the change, and ask before overwriting.
    - If absent: proceed.
 
-6. **Create the memory folder** if missing.
+6. **Migrate existing local memory files (opt-in).**
 
-7. **Write the `CLAUDE.md`** using exactly this shape. Do not add sections, do not restate infoguana-protocol rules, do not pad:
+   List all `*.md` files in `<claude-data-dir>/projects/<slug>/memory/` *excluding* `CLAUDE.md`. If there are none, skip to step 7.
+
+   If there are, show the user a summary — file names, sizes, one-line preview each — and ask:
+
+   > *"I found N existing memory notes in `<full path>`. Migrate them to infoguana and archive the originals?  [yes / no / per-file]"*
+
+   Respect the user's answer:
+
+   - **yes** → for each file, propose `add()` args (project=`<PROJECT NAME>`, an inferred `type` and `tags`, body prefixed with a one-line provenance note like *"Migrated from local memory/<filename> on YYYY-MM-DD"*). Show the full batch of proposals as one summary, get a single confirmation, then call each `add()` in turn. After all `add`s succeed, create `<claude-data-dir>/projects/<slug>/memory.archive-infoguana-migration-<YYYY-MM-DD>/` and move every migrated file into it.
+   - **no** → leave every file in place. Do *not* add the archive bullet to the generated CLAUDE.md.
+   - **per-file** → for each file, show its content and ask: *"migrate to infoguana, archive only, or leave alone?"*. Apply each choice: migrate → propose `add()` args + confirm + execute + archive; archive only → skip `add()`, just move to the archive folder; leave alone → no-op.
+
+   If any file was archived in this step, the new `CLAUDE.md` should include the "Pre-migration notes live in..." bullet (see step 7 template). If nothing was archived, omit that bullet.
+
+7. **Create the memory folder** if missing.
+
+8. **Write the `CLAUDE.md`** using exactly this shape. Do not add sections, do not restate infoguana-protocol rules, do not pad:
 
    ```markdown
    # <PROJECT NAME>
@@ -72,17 +88,17 @@ If the user wants the file *committed to the repo* instead (so collaborators who
    Full infoguana-protocol guidance (good/bad memory examples, when-to-save rules) is in the SessionStart preamble — no need to restate it here.
    ```
 
-8. **Confirm** what was written and where. Tell the user to start a fresh Claude Code session for it to take effect.
+9. **Confirm** what was written and where. If step 6 archived any files, also tell the user how many notes were migrated to infoguana and where the originals were moved. Tell the user to start a fresh Claude Code session for the new CLAUDE.md to take effect.
 
 ## Optional variants
 
-**Project migrating off local memory.** If the project had a pre-infoguana `memory/` folder with notes that were archived (not deleted), add a bullet just after the "Do not write" line:
+**Pre-migration archive bullet.** When step 6 archived any files, the generated `CLAUDE.md` gets an extra bullet just after the "Do not write" line:
 
 ```
 Pre-migration notes live in `memory.archive-infoguana-migration-<YYYY-MM-DD>/` (archived <date>, do not revive).
 ```
 
-Only add this if there is actually an archive folder — otherwise skip.
+This is automatic — only present when an archive folder was actually created.
 
 ## Principles
 

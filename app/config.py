@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     github_read_token: str | None = None
     github_bot_tokens: dict[str, str] = {}
 
+    @field_validator("github_bot_tokens", mode="before")
+    @classmethod
+    def _empty_to_empty_dict(cls, v):
+        # docker-compose passes INFOGUANA_GITHUB_BOT_TOKENS as "" when the
+        # user hasn't set it. pydantic-settings would then try to json.loads("")
+        # and crash. Treat empty/whitespace as the default {}.
+        if isinstance(v, str) and not v.strip():
+            return {}
+        return v
+
     # Read-only filesystem access for infoguana MCP clients (infoguana-chat agent and
     # any Claude Code session connected to the infoguana MCP server). Colon-
     # separated list of absolute root directories the agent may read under.

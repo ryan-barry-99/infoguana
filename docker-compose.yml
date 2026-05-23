@@ -5,9 +5,11 @@ services:
     restart: unless-stopped
     ports:
       - "${INFOGUANA_PORT:-8789}:8789"
-    # .env is optional — every setting below has a default. Compose
-    # auto-loads .env from this directory for ${VAR} interpolation, so
-    # dropping overrides into .env still works.
+    # Every setting below has a default. Drop overrides into .env to change
+    # them — the env_file directive below loads it into the container.
+    env_file:
+      - path: .env
+        required: false
     environment:
       INFOGUANA_HOST: ${INFOGUANA_HOST:-0.0.0.0}
       INFOGUANA_PORT: ${INFOGUANA_PORT:-8789}
@@ -20,8 +22,8 @@ services:
       # Empty → entrypoint generates one and persists it to /data/.mcp_secret.
       INFOGUANA_MCP_SECRET: ${INFOGUANA_MCP_SECRET:-}
       # GitHub integration is optional; chat features degrade gracefully if unset.
+      # Set INFOGUANA_GITHUB_READ_TOKEN and/or INFOGUANA_GITHUB_BOT_TOKENS in .env.
       INFOGUANA_GITHUB_READ_TOKEN: ${INFOGUANA_GITHUB_READ_TOKEN:-}
-      INFOGUANA_GITHUB_BOT_TOKENS: ${INFOGUANA_GITHUB_BOT_TOKENS:-}
     volumes:
       - ./data:/data
       - ./backups:/backups

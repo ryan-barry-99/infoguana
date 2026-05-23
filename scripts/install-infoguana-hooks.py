@@ -144,8 +144,21 @@ def main() -> int:
         print("error: INFOGUANA_HOOK_CHUNKS must be an integer", file=sys.stderr)
         return 1
 
-    token = MCP_SECRET_FILE.read_text().strip()
-    base_url = _base_url_from_mcp_json()
+    try:
+        token = MCP_SECRET_FILE.read_text().strip()
+        base_url = _base_url_from_mcp_json()
+    except PermissionError as e:
+        # Old containers (pre-PUID/PGID entrypoint) wrote secret files as
+        # root with chmod 600. The current entrypoint chowns to the host
+        # user, so this only triggers on stale state from before the fix.
+        print(f"error: can't read {e.filename or 'data/'} — owned by another user.",
+              file=sys.stderr)
+        print("hint:  rebuild + restart the container so the entrypoint can chown",
+              file=sys.stderr)
+        print("       host-side files to your UID/GID, or manually:", file=sys.stderr)
+        print(f"           sudo chown -R $USER:$USER {REPO_DIR / 'data'}",
+              file=sys.stderr)
+        return 1
     env_status = _ensure_infoguana_env(token, base_url)
 
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)

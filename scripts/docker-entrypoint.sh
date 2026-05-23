@@ -8,8 +8,17 @@ SECRET_FILE=/data/.mcp_secret
 MCP_CONFIG_FILE=/data/mcp.json
 PLACEHOLDER=change-me-lan-shared-secret
 
+# Host UID/GID for bind-mounted files. Defaults to 1000:1000 (the typical
+# first-user UID on Ubuntu/Debian). Linux users on other UIDs should set:
+#   PUID=$(id -u) PGID=$(id -g) docker compose up -d
+# On Docker Desktop (Windows/macOS), file ownership is virtualized by the
+# storage layer, so these values don't affect host-side visibility.
+PUID="${PUID:-1000}"
+PGID="${PGID:-1000}"
+
+mkdir -p /data /backups /claude-config
+
 if [ -z "${INFOGUANA_MCP_SECRET:-}" ] || [ "${INFOGUANA_MCP_SECRET:-}" = "$PLACEHOLDER" ]; then
-    mkdir -p /data
     if [ ! -s "$SECRET_FILE" ]; then
         python -c "import secrets; print(secrets.token_hex(32))" > "$SECRET_FILE"
         chmod 600 "$SECRET_FILE"
@@ -25,7 +34,6 @@ fi
 # when the container is reachable at a non-localhost address.
 PUBLIC_HOST="${INFOGUANA_PUBLIC_HOST:-localhost}"
 PUBLIC_PORT="${INFOGUANA_PORT:-8789}"
-mkdir -p /data
 cat > "$MCP_CONFIG_FILE" <<EOF
 {
   "mcpServers": {
@@ -39,6 +47,14 @@ cat > "$MCP_CONFIG_FILE" <<EOF
   }
 }
 EOF
+
+# Take ownership of bind-mounted state so the host user can read+manage it
+# without sudo. Applied every run so an installation that started owned by
+# root (from before this fix) self-heals on the next `docker compose up`.
+# Best-effort: chown can fail if the container is configured to run as a
+# non-root user (e.g. compose `user:` directive) — in that case files are
+# already owned by whatever the container runs as, and chown is unnecessary.
+chown -R "${PUID}:${PGID}" /data /backups /claude-config 2>/dev/null || true
 
 cat <<EOF
 ────────────────────────────────────────────────────────────────────────

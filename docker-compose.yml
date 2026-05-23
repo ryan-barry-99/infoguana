@@ -24,6 +24,14 @@ services:
       # GitHub integration is optional; chat features degrade gracefully if unset.
       # Set INFOGUANA_GITHUB_READ_TOKEN and/or INFOGUANA_GITHUB_BOT_TOKENS in .env.
       INFOGUANA_GITHUB_READ_TOKEN: ${INFOGUANA_GITHUB_READ_TOKEN:-}
+      # Bind-mounted files (./data, ./backups, ./claude-config) get chowned to
+      # this UID:GID on every entrypoint run so the host user can read/edit them
+      # without sudo. Default 1000:1000 = first user on most Linux distros.
+      # Linux users on a different UID should set in .env or shell:
+      #   PUID=$(id -u) PGID=$(id -g) docker compose up -d
+      # Docker Desktop on Windows/macOS virtualizes ownership, so leave as default.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
     volumes:
       - ./data:/data
       - ./backups:/backups

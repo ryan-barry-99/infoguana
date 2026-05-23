@@ -40,7 +40,17 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    src = json.loads(SRC.read_text())
+    try:
+        src = json.loads(SRC.read_text())
+    except PermissionError:
+        # Stale state from pre-PUID/PGID entrypoint (pre-this-fix) — secret
+        # files were written root-owned with chmod 600. Current entrypoint
+        # chowns to the host user on every run, so a container restart fixes
+        # this; otherwise chown manually.
+        print(f"error: can't read {SRC} — owned by another user.", file=sys.stderr)
+        print("hint:  rebuild + restart the container, or manually:", file=sys.stderr)
+        print(f"           sudo chown -R $USER:$USER {SRC.parent}", file=sys.stderr)
+        return 1
     infoguana_entry = src.get("mcpServers", {}).get("infoguana")
     if not infoguana_entry:
         print(f"error: {SRC} has no mcpServers.infoguana block", file=sys.stderr)

@@ -7,12 +7,12 @@ source: community
 
 # Infoguana Onboard
 
-Creates a minimal project-level `CLAUDE.md` that delegates memory to the shared **infoguana** MCP server. The file is a *pointer* to the infoguana protocol (which lives in the SessionStart hook preamble), not a restatement of it — keeping per-session context small.
+Creates a minimal project-level `CLAUDE.md` that delegates memory to the shared **infoguana** MCP server. The file is a *pointer* to infoguana protocol (which lives in the SessionStart hook preamble), not a restatement of it — keeping per-session context small.
 
 ## When to use
 
 - User asks to "onboard this project to infoguana" / "set up infoguana for this repo" / "write an infoguana CLAUDE.md"
-- A fresh project needs its Claude Code memory folder initialized with the infoguana-first protocol
+- A fresh project needs its Claude Code memory folder initialized with infoguana-first protocol
 - An existing project has a bloated `CLAUDE.md` that should be slimmed to just-a-pointer
 
 ## Where the file goes
@@ -92,9 +92,9 @@ Only add this if there is actually an archive folder — otherwise skip.
 
 ## Source of truth
 
-The canonical template lives at [`docs/CLAUDE.md.template`](../../docs/CLAUDE.md.template) in the infoguana repo. The CLI equivalent of this skill is [`scripts/init-project-infoguana.py`](../../scripts/init-project-infoguana.py), which stamps the same template into the **repo root** (for cases where the file should be committed). If the template changes, update this skill to match.
+The canonical template lives at [`docs/CLAUDE.md.template`](../../docs/CLAUDE.md.template) in infoguana repo. The CLI equivalent of this skill is [`scripts/init-project-infoguana.py`](../../scripts/init-project-infoguana.py), which stamps the same template into the **repo root** (for cases where the file should be committed). If the template changes, update this skill to match.
 
 ## Related
 
-- `context` / `search` / `similar` / `add` / `get` — the infoguana MCP tools the written file points at
+- `context` / `search` / `similar` / `add` / `get` — infoguana MCP tools the written file points at
 - `CLAUDE.md` in the `infoguana` project itself is a live reference example of the target shape

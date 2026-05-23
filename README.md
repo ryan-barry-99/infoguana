@@ -1,13 +1,14 @@
-<p align="center">
-  <img src="app/static/infoguana.png" alt="infoguana" width="220">
-</p>
+<div align="center">
+  <img src="app/static/infoguana.png" alt="infoguana" width="240">
+</div>
 
-# Infoguana
-
-Cross-project second brain. FastAPI + SQLite (with sqlite-vec + FTS5) +
-HTMX UI + MCP. Captures notes from phone/laptop, classifies them via
-Claude Code CLI, and serves them to project-local Claude agents over
-MCP so each agent is backed by a bigger shared memory.
+Iguanas are ectotherms that depend on external heat to function.
+Infoguana — *info* + *iguana* — gives LLM agents the same kind of
+external lifeline: a cross-project second brain with typed-graph notes,
+hybrid retrieval, and MCP integration. FastAPI + SQLite (with
+sqlite-vec + FTS5) + HTMX UI + MCP. Captures notes from phone/laptop,
+classifies them via Claude Code CLI, and serves them to project-local
+Claude agents over MCP so each agent is backed by a bigger shared memory.
 
 ## How it works
 

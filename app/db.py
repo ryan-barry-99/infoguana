@@ -512,6 +512,47 @@ def list_note_versions(note_id: int) -> list[dict]:
     return out
 
 
+_CLASSIFICATION_FIELDS = {"type", "tags", "project", "description", "preview"}
+
+
+def apply_classification(note_id: int, **fields) -> Optional[Note]:
+    """Write classifier-derived fields without snapshotting or bumping
+    `version`. Used by pipeline.process_note so the classifier completing
+    an initial capture doesn't read as a user edit in history. Accepts
+    only fields in _CLASSIFICATION_FIELDS; unknown fields raise ValueError.
+
+    Updates `updated_at` so timestamp-based UIs still see the change.
+    Returns the refreshed Note (or None if the note doesn't exist)."""
+    unknown = set(fields) - _CLASSIFICATION_FIELDS
+    if unknown:
+        raise ValueError(
+            f"apply_classification: unsupported fields {sorted(unknown)}; "
+            f"only {sorted(_CLASSIFICATION_FIELDS)} are allowed"
+        )
+    if not fields:
+        return get_note(note_id)
+
+    set_parts: list[str] = []
+    values: list = []
+    for k, v in fields.items():
+        if k == "tags":
+            set_parts.append("tags = ?")
+            values.append(json.dumps(v))
+        else:
+            set_parts.append(f"{k} = ?")
+            values.append(v)
+    set_parts.append("updated_at = ?")
+    values.append(datetime.now(timezone.utc).isoformat())
+    values.append(note_id)
+
+    with tx() as conn:
+        existing = conn.execute("SELECT 1 FROM notes WHERE id = ?", (note_id,)).fetchone()
+        if not existing:
+            return None
+        conn.execute(f"UPDATE notes SET {', '.join(set_parts)} WHERE id = ?", values)
+    return get_note(note_id)
+
+
 def update_note(note_id: int, data: NoteUpdate) -> Optional[Note]:
     fields: list[str] = []
     values: list = []

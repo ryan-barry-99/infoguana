@@ -66,7 +66,11 @@ def process_note(note_id: int, force_reclassify: bool = False) -> None:
         update_kwargs["preview"] = classify.derive_fallback_preview(note.content)
 
     if update_kwargs:
-        db.update_note(note_id, NoteUpdate(**update_kwargs))
+        # Classifier fields are system-derived — bypass the snapshot path so
+        # they don't read as a user edit in version history. Both first-time
+        # classify and force_reclassify go through here; the user's intent
+        # is "classify this", not "edit fields one-by-one".
+        db.apply_classification(note_id, **update_kwargs)
         note = db.get_note(note_id) or note
 
     # Always (re)embed — content or description may have changed.

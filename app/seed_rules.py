@@ -137,7 +137,7 @@ GLOBAL_RULES: list[dict] = [
             "- Same goes for commit messages, PR descriptions, and any "
             "artifact other developers will read without infoguana.\n"
             "- It's still fine (and expected) to cross-reference notes "
-            "*inside the infoguana itself* — that's what the typed-edge "
+            "*inside infoguana itself* — that's what the typed-edge "
             "graph and `#N` references are for. Just don't leak those IDs "
             "out into the codebase."
         ),
@@ -145,7 +145,7 @@ GLOBAL_RULES: list[dict] = [
     },
     {
         "description": (
-            "Search the infoguana before adding a new note — prefer update over "
+            "Search infoguana before adding a new note — prefer update over "
             "near-duplicate to preserve links, history, and provenance."
         ),
         "preview": (
@@ -154,7 +154,7 @@ GLOBAL_RULES: list[dict] = [
             "Search first; edit in place via update(id) to keep links intact."
         ),
         "content": (
-            "**Search the infoguana before adding a new note.** Near-"
+            "**Search infoguana before adding a new note.** Near-"
             "duplicates fragment retrieval and break the assumption that a "
             "note id is a stable handle on an idea.\n\n"
             "**Why:** When the same concept exists across two or three "
@@ -235,7 +235,7 @@ GLOBAL_RULES: list[dict] = [
             "- ✅ Good — actionable, self-contained: `\"FTS5 BM25 for "
             "short notes: k1=1.2, b=0.65. Default b=0.75 over-penalized "
             "short content (~30-100 tokens) and tanked recall.\"`\n"
-            "- Include code snippets inline. The infoguana is cross-repo, "
+            "- Include code snippets inline. Infoguana is cross-repo, "
             "so a bare path like `foo.cpp:42` rots when accessed from a "
             "different project. Save the substance.\n"
             "- Structure feedback/project notes with a **Why:** line (the "

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     #   PRs, comments). Should be a PAT on the user's personal account with
     #   broad read scope; what the PAT can see is what the chat can see.
     # - github_bot_tokens: map of project name -> PAT used when posting
-    #   comments from that project's chat. The project key matches the infoguana's
+    #   comments from that project's chat. The project key matches infoguana's
     #   `chat.project` value. Missing key => writes refuse with a clear error.
     #   Env form is a JSON string, e.g.:
     #     INFOGUANA_GITHUB_BOT_TOKENS='{"my-project":"ghp_xxx"}'
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
         return v
 
     # Read-only filesystem access for infoguana MCP clients (infoguana-chat agent and
-    # any Claude Code session connected to the infoguana MCP server). Colon-
+    # any Claude Code session connected to infoguana MCP server). Colon-
     # separated list of absolute root directories the agent may read under.
     # Any path that, after resolution, does not lie under one of these roots
     # is refused. Denylist for secrets / .git / *.sqlite is hardcoded in

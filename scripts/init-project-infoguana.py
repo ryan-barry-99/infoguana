@@ -5,7 +5,7 @@ Usage:
     python init-project-infoguana.py <project-name> [target-dir]
 
 If <target-dir> is omitted, writes into the current directory.
-<project-name> should match what you want the infoguana to key notes on —
+<project-name> should match what you want infoguana to key notes on —
 usually the cwd basename (e.g., "my-api").
 """
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Thin GitHub REST client used by the infoguana chat MCP tools.
+"""Thin GitHub REST client used by infoguana chat MCP tools.
 
 Two auth scopes:
 - Reads use a single personal PAT (`settings.github_read_token`). What that
@@ -32,7 +32,7 @@ _gh_token_cache: Optional[str] = None
 
 def _gh_cli_token() -> Optional[str]:
     """Fallback read-token source: shell `gh auth token` once per process and
-    cache the result. Lets the infoguana read with the user's existing gh CLI
+    cache the result. Lets infoguana read with the user's existing gh CLI
     credentials when INFOGUANA_GITHUB_READ_TOKEN isn't explicitly configured."""
     global _gh_token_cache
     if _gh_token_cache is not None:

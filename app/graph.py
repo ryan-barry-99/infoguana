@@ -1,4 +1,4 @@
-"""Knowledge graph over the infoguana:
+"""Knowledge graph over infoguana:
 
 - note nodes  (semantic similarity edges between them)
 - project nodes (each note is linked to its project node)
@@ -431,7 +431,7 @@ def build_graph(
 
 
 class _Adjacency:
-    """Lazy adjacency view of the infoguana graph, scoped per call."""
+    """Lazy adjacency view of infoguana graph, scoped per call."""
 
     def __init__(self) -> None:
         conn = db.get_conn()
@@ -802,7 +802,7 @@ def build_context(
     """BFS outward from a project node, returning a token-budgeted list of
     notes sorted by reachability (product of edge weights along the best path).
 
-    Intended for an agent to call at task start: "what does the infoguana know
+    Intended for an agent to call at task start: "what does infoguana know
     about <project>, within ~1500 tokens?"
 
     `rule` notes for the project pin to the very top with full bodies

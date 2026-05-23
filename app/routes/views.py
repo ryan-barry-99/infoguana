@@ -53,7 +53,7 @@ def capture_page(request: Request) -> HTMLResponse:
 
 @router.get("/projects", response_class=HTMLResponse)
 def projects_page(request: Request) -> HTMLResponse:
-    """Portfolio dashboard: every project the infoguana knows about with counts
+    """Portfolio dashboard: every project infoguana knows about with counts
     of pending / complete plans, total notes, and last activity. Each cell
     links into /browse with matching filters. Hidden projects (toggled via
     the per-row × button) are excluded from the table and surfaced through

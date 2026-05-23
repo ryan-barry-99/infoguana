@@ -158,27 +158,22 @@ the repo root to override (see `.env.example`).
 
 ## Auto-inject project context on first prompt
 
-Claude Code's MCP gives the agent the infoguana on demand, but it has to
+Claude Code's MCP gives the agent infoguana on demand, but it has to
 remember to call `context` itself. To skip the cold-start step, install
 the `SessionStart` hooks that ship with this repo — they pack the
 project's preview-mode infoguana context (~70 short note previews)
 directly into the agent's first turn, so architecture / open work / hard
 rules are visible inline before answering anything.
 
-**Step 1.** Create `~/.infoguana.env` (in your home directory) with:
-
-```
-INFOGUANA_URL=http://localhost:8789
-INFOGUANA_TOKEN=<paste from ./data/.mcp_secret>
-# INFOGUANA_ONBOARD_BUDGET=4000   # optional, default 4000 tokens of previews
-```
-
-**Step 2.** Register the hooks (idempotent — adds entries to
-`~/.claude/settings.json`):
-
 ```bash
 python scripts/install-infoguana-hooks.py
 ```
 
+The installer auto-creates `~/.infoguana.env` from the container's
+`data/.mcp_secret` and `data/mcp.json`, then registers the hook entries
+in `~/.claude/settings.json`. Re-running is idempotent and safe — other
+vars in `~/.infoguana.env` (e.g. a custom `INFOGUANA_ONBOARD_BUDGET`)
+are preserved on refresh.
+
 That's it. Open Claude Code in any project and the first user message
-auto-loads the infoguana's project context.
+auto-loads infoguana's project context.

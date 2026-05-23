@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""SessionStart hook for Claude Code: pulls the infoguana's memory
+"""SessionStart hook for Claude Code: pulls infoguana's memory
 protocol + project context for the current cwd's project, and emits the
 JSON shape Claude Code expects (additionalContext).
 
 Reads INFOGUANA_URL and INFOGUANA_TOKEN from ~/.infoguana.env (preferred)
-or the env. Fails open: if the infoguana is unreachable, silently emits
+or the env. Fails open: if infoguana is unreachable, silently emits
 nothing so the session still starts cleanly.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ The user uses the `infoguana` MCP server as their authoritative persistent memor
 
 - Do NOT write to `~/.claude/projects/*/memory/*.md` or create/update `MEMORY.md` files there.
 - Save everything worth retaining (user facts, feedback, project context, references) via `add(content=..., project=<this>)`.
-- If you see an existing `~/.claude/projects/*/memory/` directory, treat it as legacy — do not extend it. Migrate substance to the infoguana if still relevant.
+- If you see an existing `~/.claude/projects/*/memory/` directory, treat it as legacy — do not extend it. Migrate substance to infoguana if still relevant.
 """
 
 

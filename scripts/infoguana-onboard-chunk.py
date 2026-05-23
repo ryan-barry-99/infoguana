@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SessionStart hook for Claude Code: fetches one slice of the infoguana's
+"""SessionStart hook for Claude Code: fetches one slice of infoguana's
 onboard blob and emits it as additionalContext.
 
 Each hook's additionalContext is capped at ~2KB inline, but the cap is

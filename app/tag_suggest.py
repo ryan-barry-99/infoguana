@@ -15,7 +15,7 @@ Scoring layers (per plan #165, refined by #315):
 - Frequency prior: small log(df) tiebreaker so established tags edge out
   rarer ones at equal semantic score.
 - Project affinity: small bonus if the candidate is already in use in the
-  caller's project. Cross-project tags still flow — the infoguana's whole point
+  caller's project. Cross-project tags still flow — infoguana's whole point
   is cross-pollination.
 
 Ephemeral identifier patterns (`issue-NNN`, `pr-NNN`, `<repo>-pr-NNN`)

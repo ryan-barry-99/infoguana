@@ -31,7 +31,7 @@ token; the web UI is open to anything that can reach the port, so don't
 expose `:8789` directly to the public internet — keep it on a trusted
 network or behind a reverse proxy / mesh VPN.
 
-If the infoguana host is reachable at a name other than `localhost`,
+If infoguana host is reachable at a name other than `localhost`,
 bake that into the generated `mcp.json` so the installer wires Claude
 Code at the right address:
 
@@ -42,7 +42,7 @@ python scripts/install-infoguana-mcp.py
 
 ## Filesystem read tools (optional)
 
-The infoguana exposes read-only filesystem tools (`read_file`,
+Infoguana exposes read-only filesystem tools (`read_file`,
 `list_dir`, `grep`) so the chat agent and connected Claude Code
 sessions can ground answers in actual source files. Access is scoped by
 an allowlist:

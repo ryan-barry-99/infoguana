@@ -1191,7 +1191,7 @@ def list_hidden_projects() -> list[str]:
 def project_stats() -> list[dict]:
     """Per-project aggregates for the /projects dashboard. Includes projects
     with zero notes (present only in the `projects` table) so the user sees
-    everything the infoguana knows about, not just everything they've captured
+    everything infoguana knows about, not just everything they've captured
     against. Also emits a synthetic row for notes with NULL project under
     the name '' (the template renders that as 'no project'). Sorted by
     pending-plans DESC, then last-activity DESC, so active work floats up."""
@@ -1236,7 +1236,7 @@ def project_stats() -> list[dict]:
 
 
 def list_project_names() -> list[str]:
-    """Distinct project names known to the infoguana — union of the projects
+    """Distinct project names known to infoguana — union of the projects
     table and any project value ever attached to a note."""
     rows = get_conn().execute(
         """

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotent installer for the infoguana's Claude Code SessionStart hooks.
+"""Idempotent installer for infoguana's Claude Code SessionStart hooks.
 
 Does two things:
 

@@ -1,4 +1,4 @@
-"""MCP server exposing the infoguana over Streamable HTTP.
+"""MCP server exposing infoguana over Streamable HTTP.
 
 Designed to be called by project-local Claude agents. Each tool is a thin
 adapter over the same functions the web UI uses."""
@@ -149,7 +149,7 @@ def infoguana_search(
     confirmed_only: bool = True,
     expand_top: int = 0,
 ) -> dict:
-    """Search the infoguana using hybrid BM25 + semantic vector search.
+    """Search infoguana using hybrid BM25 + semantic vector search.
 
     Use this at task start to find past notes, ideas, or decisions relevant to
     what you're working on — especially across different projects.
@@ -261,11 +261,11 @@ def infoguana_add(
     confidence: str = "unspecified",
     provenance_note: Optional[str] = None,
 ) -> dict:
-    """Save a note into the infoguana from the current project context.
+    """Save a note into infoguana from the current project context.
 
     Pass `project` as the name of the project you're working in (usually the
     basename of the current working directory) so the note can be cross-
-    referenced later. If you leave `type` unset, the infoguana will classify it
+    referenced later. If you leave `type` unset, infoguana will classify it
     automatically in the background.
 
     Before saving, prefer calling `tag_suggest(content, project,
@@ -371,7 +371,7 @@ def infoguana_tag_suggest(
     """Rank existing tags by relevance to a draft note before saving.
 
     Call this *before* `add` to avoid minting near-duplicate tags
-    (`#auth` vs `#authentication`, `#db` vs `#database`). The infoguana
+    (`#auth` vs `#authentication`, `#db` vs `#database`). Infoguana
     scores its established tag vocabulary by:
 
     - **semantic**: tags used on notes most similar to your `content`

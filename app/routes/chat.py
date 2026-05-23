@@ -1,8 +1,8 @@
 """Chat router: multi-turn conversations backed by the `claude -p` CLI with
-the infoguana MCP server wired in.
+infoguana MCP server wired in.
 
 The agent run is decoupled from the HTTP connection so navigating away (or
-restarting the infoguana) doesn't kill it. POST /chats/{id}/send creates the
+restarting infoguana) doesn't kill it. POST /chats/{id}/send creates the
 assistant message row, kicks off a background task that streams events from
 `claude -p` into the `message_events` table, and returns the message id.
 Clients then subscribe via GET /messages/{id}/events (SSE), which tails the
@@ -150,7 +150,7 @@ chat's bot identity (see rules below)
 - WebSearch: search the web for current information
 - WebFetch: read a specific URL
 
-Editing the infoguana: if the user tells you a saved note is wrong, out of date, \
+Editing infoguana: if the user tells you a saved note is wrong, out of date, \
 or missing context, update it in place via update rather than adding a \
 new one. Deletions should be explicitly user-requested or obvious-duplicate \
 cleanups — when in doubt, ask.
@@ -177,7 +177,7 @@ for explicit confirmation; it's a write on shared state.
 
 Retrieval hierarchy: before answering, decide whether the question is about
 (a) the user's own past work, ideas, or decisions — call search /
-context first; the infoguana is authoritative and things from training \
+context first; infoguana is authoritative and things from training \
 may be out of date; (b) current external facts or research — call \
 WebSearch, then WebFetch on the most promising link for details; (c) general \
 reasoning — answer directly. Combine as needed.
@@ -330,7 +330,7 @@ def _attachment_marker(atts: list[MessageAttachment]) -> str:
 
 def _render_history(messages: list[Message]) -> str:
     """Rebuild prior turns as a plain-text transcript. v1 doesn't replay tool
-    calls — Claude can re-query the infoguana if it needs to."""
+    calls — Claude can re-query infoguana if it needs to."""
     lines: list[str] = []
     for m in messages:
         if m.role == "user":
@@ -342,7 +342,7 @@ def _render_history(messages: list[Message]) -> str:
 
 def _seed_context(query: str, project: Optional[str] = None,
                         limit: int = 5) -> str:
-    """Build a first-turn prompt preamble so the infoguana is always consulted on
+    """Build a first-turn prompt preamble so infoguana is always consulted on
     turn one rather than trusting the model to remember to call the tool.
 
     When `project` is set, render via the same `onboard.build` that produces
@@ -372,7 +372,7 @@ def _seed_context(query: str, project: Optional[str] = None,
     if not hits:
         return ""
     lines = [
-        "Relevant notes from the infoguana (auto-fetched at conversation start):",
+        "Relevant notes from infoguana (auto-fetched at conversation start):",
         "",
     ]
     for note, score in hits:

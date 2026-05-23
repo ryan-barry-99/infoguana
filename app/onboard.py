@@ -20,7 +20,7 @@ _build_lock = threading.Lock()
 
 DEFAULT_PROTOCOL = """\
 You are a Claude Code agent connected to the user's shared cross-project \
-**infoguana** via the `infoguana` MCP server. The infoguana is the user's authoritative \
+**infoguana** via the `infoguana` MCP server. Infoguana is the user's authoritative \
 memory across every project they work on. Use it.
 
 ## When to call which tool
@@ -44,7 +44,7 @@ carries `edges_out` and `edges_in` (grouped by edge type, with target id \
 decision in one shot. For multi-hop walks across the graph, call \
 `traverse(start_id, edge_type=...)`.
 
-**During a task** that feels familiar: search the infoguana *before* you start \
+**During a task** that feels familiar: search infoguana *before* you start \
 implementing. If past you (or another project) has solved this, use that.
 
 **Previews vs full bodies**: hits from `search` / `similar` and \
@@ -59,13 +59,13 @@ Cite from verified content, not from a hand-sized summary.
 **When the user asks something as if you already know the context** — \
 references a project, person, decision, acronym, or past event you don't \
 recognize, or asks a question that assumes background you don't have — \
-search the infoguana *before* answering or asking them to explain. The user's \
-memory and yours are meant to be shared via the infoguana; if you're missing \
+search infoguana *before* answering or asking them to explain. The user's \
+memory and yours are meant to be shared via infoguana; if you're missing \
 context, that's a signal to read, not to guess or punt.
 
 **When you learn something worth retaining**: call `add(content=..., \
 project=<this>)`. Capture the **how** and **why**, not just the category. \
-Include code snippets inline — the infoguana is cross-repo, so a bare path like \
+Include code snippets inline — infoguana is cross-repo, so a bare path like \
 `foo.cpp:42` rots when accessed from a different project. Save the substance.
 
 **When two notes meaningfully connect**: propose a \
@@ -168,7 +168,7 @@ def build(project: str, budget_tokens: int = 4000) -> str:
             _emit_rule(r)
 
     parts.append(
-        f"\n## relevant memories from the infoguana "
+        f"\n## relevant memories from infoguana "
         f"(~{ctx['total_tokens_est']} tokens, budget {budget_tokens})\n"
     )
     notes = ctx.get("notes") or []

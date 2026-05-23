@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotent installer: merges the infoguana's generated mcp.json into the
+"""Idempotent installer: merges infoguana's generated mcp.json into the
 user's Claude Code config (~/.claude.json -> mcpServers.infoguana).
 
 The container entrypoint writes ./data/mcp.json on every start with the

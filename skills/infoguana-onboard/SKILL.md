@@ -1,8 +1,6 @@
 ---
 name: infoguana-onboard
 description: Write a minimal project-level CLAUDE.md that delegates memory to the shared infoguana MCP server. Use when the user wants to onboard a project to infoguana, set up infoguana memory for a new repo, initialize a fresh Claude Code project with infoguana-first memory, or slim a bloated CLAUDE.md down to a pointer. Outputs a ~12-line file so CLAUDE.md does not tax the context window on every session.
-risk: safe
-source: community
 ---
 
 # Infoguana Onboard

@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Annotated
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -53,7 +54,11 @@ class Settings(BaseSettings):
     # app/fs_access.py.
     #
     # Env form: INFOGUANA_FS_ALLOWLIST=/root/code:/root/docs
-    fs_allowlist: list[Path] = [Path("/root/code")]
+    # NoDecode tells pydantic-settings not to JSON-decode the env value — the
+    # validator below splits the colon-separated string itself. Without
+    # NoDecode, the env-var source would crash on `json.loads("/root/code")`
+    # before the validator gets a chance to run.
+    fs_allowlist: Annotated[list[Path], NoDecode] = [Path("/root/code")]
     fs_read_max_bytes: int = 500 * 1024  # 500 KiB hard cap per read
 
     @field_validator("fs_allowlist", mode="before")

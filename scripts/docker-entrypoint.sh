@@ -45,7 +45,7 @@ cat <<EOF
   infoguana ready on :${PUBLIC_PORT}
   Web UI:     http://${PUBLIC_HOST}:${PUBLIC_PORT}/
   MCP secret: $(cat "$SECRET_FILE" 2>/dev/null || echo "$INFOGUANA_MCP_SECRET")
-  Wire it up: ./scripts/install-infoguana-mcp.sh
+  Wire it up: python scripts/install-infoguana-mcp.py
               (merges ./data/mcp.json into ~/.claude.json)
   Optional:   docker compose exec infoguana claude /login
               (one-time Claude CLI auth for auto-classification)

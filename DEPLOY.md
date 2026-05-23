@@ -37,7 +37,7 @@ Code at the right address:
 
 ```bash
 INFOGUANA_PUBLIC_HOST=infoguana.example.com docker compose up -d --build
-./scripts/install-infoguana-mcp.sh
+python scripts/install-infoguana-mcp.py
 ```
 
 ## Filesystem read tools (optional)

@@ -113,14 +113,17 @@ in a different repo — sees that knowledge surface again.
 
 ## Quick start (Docker)
 
-Requires Docker with Compose v2.
+Requires Docker (with Compose v2) and Python 3.10+ on the host. Works on
+Linux, macOS, and Windows.
 
 ```bash
 git clone <this repo> infoguana && cd infoguana
 docker compose up -d --build
-./scripts/install-infoguana-mcp.sh           # wires it into ~/.claude.json
+python scripts/install-infoguana-mcp.py      # wires it into ~/.claude.json
 docker compose exec infoguana claude /login  # optional: enables auto-classification
 ```
+
+On Linux/macOS, use `python3` if `python` isn't on your PATH.
 
 No `.env` editing required — the container generates an MCP bearer on
 first start, persists it under `./data/.mcp_secret`, and writes a
@@ -133,7 +136,7 @@ machine, point the generated snippet at the right hostname:
 
 ```bash
 INFOGUANA_PUBLIC_HOST=infoguana.example.com docker compose up -d --build
-./scripts/install-infoguana-mcp.sh
+python scripts/install-infoguana-mcp.py
 ```
 
 After install, restart any open Claude Code sessions and run `/mcp list`
@@ -162,16 +165,19 @@ project's preview-mode infoguana context (~70 short note previews)
 directly into the agent's first turn, so architecture / open work / hard
 rules are visible inline before answering anything.
 
-```bash
-# 1. point the hooks at your infoguana server
-cat > ~/.infoguana.env <<'EOF'
+**Step 1.** Create `~/.infoguana.env` (in your home directory) with:
+
+```
 INFOGUANA_URL=http://localhost:8789
 INFOGUANA_TOKEN=<paste from ./data/.mcp_secret>
-# INFOGUANA_ONBOARD_BUDGET=4000      # optional, default 4000 tokens of previews
-EOF
+# INFOGUANA_ONBOARD_BUDGET=4000   # optional, default 4000 tokens of previews
+```
 
-# 2. idempotent install — adds the hook entries to ~/.claude/settings.json
-./scripts/install-infoguana-hooks.sh
+**Step 2.** Register the hooks (idempotent — adds entries to
+`~/.claude/settings.json`):
+
+```bash
+python scripts/install-infoguana-hooks.py
 ```
 
 That's it. Open Claude Code in any project and the first user message

@@ -36,6 +36,11 @@ in one call. `context(project)` pre-walks an IDF-weighted BFS from pinned
 anchors and packs the result into a token budget — that pack is what the
 SessionStart hook hands the agent on turn one.
 
+<div align="center">
+  <img src="app/static/infoguana_graph.png" alt="Graph view of an infoguana corpus" width="780">
+  <br><sub><em>Full-graph view: nodes are notes (shape = type, color = type), the large pink diamonds are projects, edges are typed-edge connections plus IDF-weighted tag co-occurrences.</em></sub>
+</div>
+
 **Plans and tasks are first-class.** `plan` and `task` notes share a
 lifecycle (`not_started` → `pending` → `complete`) — plans are deliberate
 units of work you want context on across sessions, tasks are smaller scoped
@@ -63,6 +68,11 @@ thousand tokens of context on its first turn (pinned plans + ranked
 previews), can drill into the graph for design intent, can capture what it
 learned without inventing new vocabulary, and the next session — possibly
 in a different repo — sees that knowledge surface again.
+
+<div align="center">
+  <img src="app/static/cross-project-memory.png" alt="A note from one project surfacing while working in another" width="780">
+  <br><sub><em>Cross-project memory in action: while working in one project, the agent unprompted-ly surfaces a PR from a different project because the BFS-over-tags-and-semantic-neighbors retrieval pulled it into the current task's context.</em></sub>
+</div>
 
 ## Endpoints
 

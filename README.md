@@ -22,6 +22,11 @@ should re-read, `plan` and `task` enter a lifecycle, `reference` is a
 pointer). Tags are agent-curated at write time; `tag_suggest` ranks existing
 vocabulary first so tags don't drift into singletons.
 
+<div align="center">
+  <img src="app/static/global_rules.png" alt="Search-and-filter view, combining a text query with type and tag facets" width="780">
+  <br><sub><em>Search-and-filter view: combine a text query with type/tag/status facets across the corpus. Each hit expands to the full rendered note inline.</em></sub>
+</div>
+
 **Retrieval is hybrid and budgeted.** `search` fuses BM25 (FTS5) and cosine
 similarity (sqlite-vec) over a single ranking. Hits come back as
 **previews** — haiku-sized 1–5 line summaries generated at write time — so

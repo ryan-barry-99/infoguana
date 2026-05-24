@@ -22,16 +22,17 @@ should re-read, `plan` and `task` enter a lifecycle, `reference` is a
 pointer). Tags are agent-curated at write time; `tag_suggest` ranks existing
 vocabulary first so tags don't drift into singletons.
 
-<div align="center">
-  <img src="app/static/global_rules.png" alt="Search-and-filter view, combining a text query with type and tag facets" width="780">
-  <br><sub><em>Search-and-filter view: combine a text query with type/tag/status facets across the corpus. Each hit expands to the full rendered note inline.</em></sub>
-</div>
-
 **Retrieval is hybrid and budgeted.** `search` fuses BM25 (FTS5) and cosine
 similarity (sqlite-vec) over a single ranking. Hits come back as
 **previews** — haiku-sized 1–5 line summaries generated at write time — so
 an agent can triage 20 results for a few hundred tokens and only pull full
 bodies (`get` / `get_many` / `expand_top=N`) for the ones worth quoting.
+
+<div align="center">
+  <img src="app/static/global_rules.png" alt="Search-and-filter view, combining a text query with type and tag facets" width="780">
+  <br><sub><em>Search-and-filter view: combine a text query with type/tag/status facets across the corpus. Each hit expands to the full rendered note inline.</em></sub>
+  <br><br>
+</div>
 
 **Notes form a typed graph.** Edges carry meaning: `implements`,
 `supersedes`, `references`, `caused_by`, `bundled_with`, `prerequisite_for`.
@@ -44,6 +45,7 @@ SessionStart hook hands the agent on turn one.
 <div align="center">
   <img src="app/static/infoguana_graph.png" alt="Graph view of an infoguana corpus" width="780">
   <br><sub><em>Full-graph view: nodes are notes (shape = type, color = type), the large pink diamonds are projects, edges are typed-edge connections plus IDF-weighted tag co-occurrences.</em></sub>
+  <br><br>
 </div>
 
 **Plans and tasks are first-class.** `plan` and `task` notes share a
@@ -77,6 +79,7 @@ in a different repo — sees that knowledge surface again.
 <div align="center">
   <img src="app/static/cross-project-memory.png" alt="A note from one project surfacing while working in another" width="780">
   <br><sub><em>Cross-project memory in action: while working in one project, the agent unprompted-ly surfaces a PR from a different project because the BFS-over-tags-and-semantic-neighbors retrieval pulled it into the current task's context.</em></sub>
+  <br><br>
 </div>
 
 ## Endpoints

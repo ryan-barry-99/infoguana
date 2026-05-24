@@ -28,6 +28,16 @@ similarity (sqlite-vec) over a single ranking. Hits come back as
 an agent can triage 20 results for a few hundred tokens and only pull full
 bodies (`get` / `get_many` / `expand_top=N`) for the ones worth quoting.
 
+**SessionStart loads a layered, token-budgeted context pack.** On a new
+Claude Code session, the hook packs the agent's first turn with:
+**global-scope rules** (cross-project guidance the agent must follow
+everywhere — "never reference internal note IDs in code", "always paginate
+GitHub API responses", etc.), **project-scope rules** (anything tagged to
+this specific project), then **project memories** with **pending plans
+and tasks pinned at the top** so outstanding work is the first thing the
+agent sees. Anything else fills the remainder of the budget by
+IDF-weighted BFS relevance; past the budget, it's dropped.
+
 <div align="center">
   <img src="app/static/global_rules.png" alt="Search-and-filter view, combining a text query with type and tag facets" width="780">
   <br><sub><em>Search-and-filter view: combine a text query with type/tag/status facets across the corpus. Each hit expands to the full rendered note inline.</em></sub>

@@ -79,7 +79,10 @@ Claude synthesis pass to render the whole arc — original idea, the plan
 that implemented it, the decisions it superseded, the bugs it caused, the
 lessons-learned, the PRs that shipped — as one comprehensive markdown doc.
 Output lives in `./data/exports/` and survives outside infoguana as a lab
-notebook, audit trail, or onboarding handoff.
+notebook, audit trail, or onboarding handoff. See
+[`docs/export/dashboard_table.md`](docs/export/dashboard_table.md) for a real
+example — the design history of the `/projects` dashboard, walked from
+plan to ship.
 
 The net effect: an agent dropped into any project gets the right few
 thousand tokens of context on its first turn (pinned plans + ranked

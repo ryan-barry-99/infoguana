@@ -28,6 +28,23 @@ similarity (sqlite-vec) over a single ranking. Hits come back as
 an agent can triage 20 results for a few hundred tokens and only pull full
 bodies (`get` / `get_many` / `expand_top=N`) for the ones worth quoting.
 
+**SessionStart loads a layered, token-budgeted context pack.** On a new
+Claude Code session, the hook packs the agent's first turn with:
+**global-scope rules** (cross-project guidance the agent must follow
+everywhere — "never reference infoguana note IDs in code", "previews are
+for triage, not citation", etc. — a starter set ships pre-seeded on first
+boot), **project-scope rules** (anything tagged to this specific project),
+then **project memories** with **pending plans and tasks pinned at the
+top** so outstanding work is the first thing the agent sees. Anything
+else fills the remainder of the budget by IDF-weighted BFS relevance;
+past the budget, it's dropped.
+
+<div align="center">
+  <img src="app/static/global_rules.png" alt="Search-and-filter view, combining a text query with type and tag facets" width="780">
+  <br><sub><em>Search-and-filter view: combine a text query with type/tag/status facets across the corpus. Each hit expands to the full rendered note inline.</em></sub>
+  <br><br>
+</div>
+
 **Notes form a typed graph.** Edges carry meaning: `implements`,
 `supersedes`, `references`, `caused_by`, `bundled_with`, `prerequisite_for`.
 `traverse(start_id, edge_type)` walks design provenance; `search(...,
@@ -35,6 +52,12 @@ include_edges=True)` attaches neighbors inline so plan/decision lookups land
 in one call. `context(project)` pre-walks an IDF-weighted BFS from pinned
 anchors and packs the result into a token budget — that pack is what the
 SessionStart hook hands the agent on turn one.
+
+<div align="center">
+  <img src="app/static/infoguana_graph.png" alt="Graph view of an infoguana corpus" width="780">
+  <br><sub><em>Full-graph view: nodes are notes (shape = type, color = type), the large pink diamonds are projects, edges are typed-edge connections plus IDF-weighted tag co-occurrences.</em></sub>
+  <br><br>
+</div>
 
 **Plans and tasks are first-class.** `plan` and `task` notes share a
 lifecycle (`not_started` → `pending` → `complete`) — plans are deliberate
@@ -56,13 +79,22 @@ Claude synthesis pass to render the whole arc — original idea, the plan
 that implemented it, the decisions it superseded, the bugs it caused, the
 lessons-learned, the PRs that shipped — as one comprehensive markdown doc.
 Output lives in `./data/exports/` and survives outside infoguana as a lab
-notebook, audit trail, or onboarding handoff.
+notebook, audit trail, or onboarding handoff. See
+[`docs/export/dashboard_table.md`](docs/export/dashboard_table.md) for a real
+example — the design history of the `/projects` dashboard, walked from
+plan to ship.
 
 The net effect: an agent dropped into any project gets the right few
 thousand tokens of context on its first turn (pinned plans + ranked
 previews), can drill into the graph for design intent, can capture what it
 learned without inventing new vocabulary, and the next session — possibly
 in a different repo — sees that knowledge surface again.
+
+<div align="center">
+  <img src="app/static/cross-project-memory.png" alt="A note from one project surfacing while working in another" width="780">
+  <br><sub><em>Cross-project memory in action: while working in one project, the agent unprompted-ly surfaces a PR from a different project because the BFS-over-tags-and-semantic-neighbors retrieval pulled it into the current task's context.</em></sub>
+  <br><br>
+</div>
 
 ## Endpoints
 

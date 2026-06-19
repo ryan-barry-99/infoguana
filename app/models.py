@@ -122,7 +122,7 @@ class Edge(BaseModel):
     created_at: datetime
 
 
-ChatModel = Literal["claude-sonnet-4-6", "claude-opus-4-7"]
+ChatModel = Literal["claude-sonnet-4-6", "claude-opus-4-8"]
 
 
 class Chat(BaseModel):

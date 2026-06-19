@@ -102,7 +102,7 @@ def graduate(plan_id: int) -> dict:
         raise HTTPException(409, "plan has already been graduated to a feature")
 
     chat = db.create_chat(
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         title=f"graduate plan #{plan_id}",
         project=plan.project,
     )

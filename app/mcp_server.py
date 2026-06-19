@@ -1156,7 +1156,7 @@ def infoguana_export(start_id: int,
             runs in both directions).
         confirmed_only: Skip unconfirmed edges (default True).
         out_dir: Override the export directory.
-        model: Synthesis model (e.g. 'claude-opus-4-7', 'sonnet'). Defaults
+        model: Synthesis model (e.g. 'claude-opus-4-8', 'sonnet'). Defaults
             to export.DEFAULT_EXPORT_MODEL. Suggested values are listed in
             export.SUGGESTED_EXPORT_MODELS.
     """

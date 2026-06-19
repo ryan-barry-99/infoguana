@@ -87,6 +87,19 @@ def _relax_collisions(
 # 20% boost without making explicit chains explode in score.
 EXPLICIT_EDGE_WEIGHT = 1.2
 
+# `supersedes` is the one explicit edge whose semantics are *anti-symmetric*
+# for retrieval: from_id is the replacement, to_id is the stale note it
+# obsoletes (new → old). Routing a reader from the stale note up to its
+# replacement is exactly what the edge is for, so that direction keeps the
+# premium weight. Routing the other way — replacement → stale — would hand
+# the best edge in the graph to knowledge that was explicitly marked
+# outdated, letting it outrank fresher notes. We keep the link reachable
+# (so the `via` path still records `edge:supersedes:…` and a reader chasing
+# history can follow it) but at a sub-similarity penalty so it never wins
+# routing. All other edge types are navigationally symmetric and stay
+# undirected at the premium weight.
+SUPERSEDED_EDGE_WEIGHT = 0.5
+
 
 # --- helpers ---------------------------------------------------------------
 
@@ -449,17 +462,22 @@ class _Adjacency:
                     self._notes_by_tag.setdefault(t, []).append(nid)
             except Exception:
                 pass
-        # Eagerly load confirmed explicit edges as undirected adjacency:
-        # if A `implements` B, hopping note->note in either direction should
-        # follow the link. Edge type goes into the `kind` so the via path
-        # records why we got here (`edge:implements:note:42`).
-        self._explicit_edges: dict[int, list[tuple[int, str]]] = {}
+        # Eagerly load confirmed explicit edges as adjacency. Most edge types
+        # are navigationally symmetric — if A `implements` B, hopping
+        # note->note in either direction should follow the link — so we add
+        # both endpoints. The third tuple element records whether this entry
+        # walks the edge in its stored direction (`forward=True`: we're at
+        # from_id heading to to_id) so `neighbors()` can special-case the one
+        # edge type whose retrieval semantics are anti-symmetric (supersedes).
+        # Edge type goes into the `kind` so the via path records why we got
+        # here (`edge:implements:note:42`).
+        self._explicit_edges: dict[int, list[tuple[int, str, bool]]] = {}
         for row in conn.execute(
             "SELECT from_id, to_id, edge_type FROM edges "
             "WHERE confirmed_by_user = 1"
         ).fetchall():
-            self._explicit_edges.setdefault(row[0], []).append((row[1], row[2]))
-            self._explicit_edges.setdefault(row[1], []).append((row[0], row[2]))
+            self._explicit_edges.setdefault(row[0], []).append((row[1], row[2], True))
+            self._explicit_edges.setdefault(row[1], []).append((row[0], row[2], False))
 
     def neighbors(self, node_id: str, per_node_k: int = 4) -> list[tuple[str, float, str]]:
         """Return (neighbor_id, edge_weight, kind) triples."""
@@ -488,10 +506,18 @@ class _Adjacency:
                     w = max(0.0, 1.0 - float(dist))
                     out.append((f"note:{neighbor.id}", w, "similar"))
             # to explicit-edge neighbors (confirmed only) — these win against
-            # similarity because the user/agent deliberately wired them.
-            for neighbor_id, edge_type in self._explicit_edges.get(nid, ()):
-                out.append((f"note:{neighbor_id}", EXPLICIT_EDGE_WEIGHT,
-                            f"edge:{edge_type}"))
+            # similarity because the user/agent deliberately wired them. The
+            # exception is the replacement → stale direction of a `supersedes`
+            # edge (forward = from_id→to_id, i.e. new→old): we deliberately
+            # de-rank it so the walk doesn't route readers *into* superseded
+            # material at premium weight. The reverse direction (stale→
+            # replacement) keeps the boost — that's the edge doing its job.
+            for neighbor_id, edge_type, forward in self._explicit_edges.get(nid, ()):
+                if edge_type == "supersedes" and forward:
+                    weight = SUPERSEDED_EDGE_WEIGHT
+                else:
+                    weight = EXPLICIT_EDGE_WEIGHT
+                out.append((f"note:{neighbor_id}", weight, f"edge:{edge_type}"))
         elif node_id.startswith("project:"):
             name = node_id.split(":", 1)[1]
             for nid in self._notes_by_project.get(name, []):

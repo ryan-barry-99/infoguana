@@ -1,0 +1,67 @@
+name: tests
+
+on:
+  # Every pull request, whatever its base. Filtering to `branches: [main]`
+  # matches on the PR's *base*, which silently skips stacked PRs — those
+  # target the branch below them, not main, so the ones most in need of a
+  # check would be the ones without one.
+  pull_request:
+  push:
+    branches: [main]
+
+# Nothing here writes anything. Declared in the file rather than left to
+# the repo-wide default so the least-privilege claim is reviewable in a
+# diff and survives a change to that setting.
+permissions:
+  contents: read
+
+# A force-push supersedes whatever was already running for that ref.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    # The suite runs in under a second; the install dominates. This is a
+    # wide margin, set so a hung step cannot hold a public runner for the
+    # six-hour default.
+    timeout-minutes: 15
+    strategy:
+      # Don't cancel 3.12 because 3.11 failed — a version-specific break is
+      # exactly what the matrix exists to surface, and killing the other leg
+      # hides whether it is one.
+      fail-fast: false
+      matrix:
+        # Floor and current. requires-python is >=3.11, so 3.11 is a claim
+        # the project makes and nothing else verifies.
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Nothing uses git after this step, and later steps run code
+          # supplied by the pull request — the build backend during the
+          # install, then the PR's own tests. Don't leave a credential in
+          # .git/config for them to read.
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      # No .env and no data/ here, which is deliberate: the suite is written
+      # to run against a bare checkout, and this is the only environment that
+      # actually holds it to that.
+      # -v so the log names every test that ran. `-q` prints dots, which
+      # tells you a count and nothing about coverage — on a green run
+      # that is the only record of what was actually exercised.
+      - name: Run tests
+        run: pytest -v --tb=short

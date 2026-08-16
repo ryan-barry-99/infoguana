@@ -114,7 +114,7 @@ def _approx_tokens(text: str) -> int:
 
 
 def _note_tokens(n: Note, full: bool = False) -> int:
-    """Budget estimate for a note. Default is preview-mode (plan #322): the
+    """Budget estimate for a note. Default is preview-mode: the
     haiku preview + description. With `full=True`, sizes against the actual
     body — used only by the bounded `expand_top` slot, never as the default,
     so a greedy caller can't reintroduce the full-mode regression."""
@@ -385,8 +385,8 @@ def build_graph(
                 add_edge(f"note:{n.id}", f"project:{n.project}", 1.0, "in_project")
 
     # Synthetic "tendons" from each global note (project=None) to every
-    # project node — see #357. Globals have no in_project edge so they
-    # render as orphans even though they semantically apply *everywhere*.
+    # project node. Globals have no in_project edge so they render as
+    # orphans even though they semantically apply *everywhere*.
     # Tendons are pure rendering: they're returned separately so they
     # don't influence layout (otherwise globals collapse onto the
     # project centroid) and don't inflate the global note's `degree`
@@ -661,7 +661,7 @@ def _pin_active_work(state: _ContextState) -> None:
     overdue not_started item is exactly the thing the user would want to
     see first.
 
-    Plan #293: a plan's bundled tasks render inline under the parent
+    A plan's bundled tasks render inline under the parent
     instead of as separate pins. Active subtask (status='pending') gets a
     full body; future subtasks (status='not_started') render as one-line
     refs; completed subtasks are skipped."""
@@ -834,7 +834,7 @@ def build_context(
     `rule` notes for the project pin to the very top with full bodies
     (always-true repo constraints — must be read, not triaged), then active
     plans/tasks, then the BFS-discovered neighborhood. Each note is emitted
-    as its haiku-generated preview (plan #322). Pass `expand_top=N` (capped
+    as its haiku-generated preview. Pass `expand_top=N` (capped
     by the caller — mcp_server clamps to 5) to inline full bodies for the
     first N selected notes (active-plans pin first, then by reachability).
     Sizing accounts for full-body expansion so the budget stays honest.

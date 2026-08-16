@@ -170,7 +170,7 @@
               </button>
             </div>
           </div>
-          {# Plan #279: graduate button surfaces on completed plans that haven't
+          {# Graduate button surfaces on completed plans that haven't
              already been graduated (no outgoing implements→feature edge). One
              click spawns a synthesis chat that drafts a feature note bundling
              the plan + its PRs + lessons-learned. #}
@@ -277,7 +277,7 @@
     {% if note.content %}
       {% if collapsed %}
         {# /browse list view collapses card bodies to the haiku-generated
-           preview (plan #322). When a note hasn't been backfilled yet, fall
+           preview. When a note hasn't been backfilled yet, fall
            back to a first-line truncation — same fallback the MCP search
            tool uses, so the GUI and the agent stay consistent. State is
            per-card and resets on next render, which is fine since this is

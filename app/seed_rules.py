@@ -121,8 +121,8 @@ GLOBAL_RULES: list[dict] = [
         ),
         "content": (
             "**Never reference infoguana note IDs in code comments or "
-            "docstrings.** Don't write \"See note #148\", \"(per #176)\", "
-            "etc. in source files.\n\n"
+            "docstrings.** Don't write \"See note <id>\" or \"(per <id>)\" "
+            "in source files.\n\n"
             "**Why:** Note IDs are internal infoguana state — they mean "
             "nothing to anyone reading the code outside an agent session "
             "with infoguana access, and they rot if a note is merged, "

@@ -1,8 +1,8 @@
 """SessionStart onboarding endpoints.
 
-Per note #374: Claude Code caps each `additionalContext` hook output at
-~2KB inline, but the cap is *per-hook* — register N hooks and each gets
-its own ~2KB inline window with no truncation. We exploit that here:
+Claude Code caps each `additionalContext` hook output at ~2KB inline, but
+the cap is *per-hook* — register N hooks and each gets its own ~2KB inline
+window with no truncation. We exploit that here:
 `/onboard/<project>/chunk/<i>?of=<n>` slices the full onboard blob into
 N line-aligned pieces; the installer wires up N hook entries that each
 fetch one slice. All N slices land inline; the agent sees the full

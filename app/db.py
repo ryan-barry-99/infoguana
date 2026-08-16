@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS notes (
     status      TEXT,                         -- only meaningful for type IN ('plan','task'): not_started|pending|complete
     linked_prs  TEXT NOT NULL DEFAULT '[]',   -- JSON array of PR URLs, for completed plans
     due_date    TEXT,                         -- only meaningful for plans/tasks: ISO 'YYYY-MM-DD' in the user's local TZ
-    version     INTEGER NOT NULL DEFAULT 1,  -- bumped on every update_note; matches the live row's version number (plan #166)
-    -- Plan #167. Trust dimension on the captured claim. 'stated' = user told
+    version     INTEGER NOT NULL DEFAULT 1,  -- bumped on every update_note; matches the live row's version number
+    -- Trust dimension on the captured claim. 'stated' = user told
     -- me explicitly; 'inferred' = I derived it from a diff/PR/code; 'speculative'
     -- = I extrapolated; 'unspecified' = pre-#167 or skipped. Never auto-promoted.
     confidence       TEXT NOT NULL DEFAULT 'unspecified',
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS notes (
 -- (update or delete), so the live `notes` row always represents version
 -- N and `note_versions` holds versions 1..N-1 (plus a final row with
 -- change_kind='delete' if the note was hard-deleted). No FK to notes —
--- versions outlive deletion so the audit trail survives. Plan #166.
+-- versions outlive deletion so the audit trail survives.
 CREATE TABLE IF NOT EXISTS note_versions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     note_id     INTEGER NOT NULL,
@@ -67,8 +67,8 @@ CREATE TABLE IF NOT EXISTS note_versions (
     due_date    TEXT,
     edited_at   TEXT NOT NULL,
     change_kind TEXT NOT NULL,                -- 'update' | 'delete'
-    confidence       TEXT NOT NULL DEFAULT 'unspecified',  -- plan #167
-    provenance_note  TEXT,                                 -- plan #167
+    confidence       TEXT NOT NULL DEFAULT 'unspecified',  -- see notes.confidence
+    provenance_note  TEXT,
     UNIQUE(note_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_note_versions_note ON note_versions(note_id, version DESC);
@@ -249,11 +249,11 @@ def init_db() -> sqlite3.Connection:
     _ensure_column(_conn, "chats", "project", "TEXT")
     _ensure_column(_conn, "messages", "run_status", "TEXT")
     _ensure_column(_conn, "projects", "hidden", "INTEGER NOT NULL DEFAULT 0")
-    # Plan #279: NoteType 'project' was renamed to 'feature' to disambiguate
+    # NoteType 'project' was renamed to 'feature' to disambiguate
     # from the per-note `project` string field. Idempotent rekey on startup.
     _conn.execute("UPDATE notes SET type = 'feature' WHERE type = 'project'")
     # Index that depends on columns the migration may have just added.
-    # Plan #289: 'task' joins 'plan' as a tracked-work type with the same
+    # 'task' joins 'plan' as a tracked-work type with the same
     # lifecycle. Drop the old plan-only partial index so we can rebuild it
     # over both types — partial-index predicates aren't editable in place.
     _conn.execute("DROP INDEX IF EXISTS idx_notes_plan_status")
@@ -674,7 +674,7 @@ def list_plans(project: Optional[str | list[str]] = None,
     own local date so the overdue boundary lines up with the user's clock.
 
     Name kept for back-compat — covers both lifecycle-bearing types since
-    plan #289 added 'task' as the non-graduating sibling of 'plan'."""
+    'task' is the non-graduating sibling of 'plan'."""
     conn = get_conn()
     where = ["type IN ('plan', 'task')"]
     params: list = []
@@ -1412,7 +1412,7 @@ def list_edges_for(note_id: int, direction: str = "both",
 
 def bundled_tasks_of(plan_id: int) -> list[Note]:
     """Return tasks bundled to a plan (incoming `bundled_with` edges from
-    notes of type='task'), sorted by created_at ASC. Plan #293 convention:
+    notes of type='task'), sorted by created_at ASC. By convention:
     task is the from_id, plan is the to_id."""
     conn = get_conn()
     rows = conn.execute(
@@ -1429,7 +1429,7 @@ def bundled_tasks_of(plan_id: int) -> list[Note]:
 
 def bundled_parent_of(task_id: int) -> Optional[Note]:
     """Return the parent plan of a task — the plan this task is bundled
-    `bundled_with`. Plan #293 convention: task is the from_id, plan is the
+    `bundled_with`. By convention task is the from_id, plan is the
     to_id. Returns None if no such edge exists or the target isn't a plan."""
     conn = get_conn()
     row = conn.execute(

@@ -28,7 +28,7 @@ def process_note(note_id: int, force_reclassify: bool = False) -> None:
     Classification runs when the note is unsorted, when force_reclassify is
     set, or when the note has no preview yet — so plans created with an
     explicit type still get one Haiku-quality preview at creation time
-    (plan #322). Type/tags/project/description from classify are only
+    Type/tags/project/description from classify are only
     persisted when the note's existing fields are in scope for re-derivation
     (unsorted-on-create or explicit force_reclassify); the preview piggybacks
     on the same call regardless. Preview always ends populated — falls back

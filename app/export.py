@@ -1,7 +1,7 @@
 """Synthesize a plan's edge subgraph into one comprehensive markdown doc by
 spawning `claude -p` over the hydrated notes + linked PR context.
 
-Replaces the per-note file dump (plan #221, phase 5) — users wanted "one doc
+Replaces the per-note file dump — users wanted "one doc
 to read" rather than a folder of fragments to parse manually. The agent is
 called with no tools: we pre-traverse the subgraph, pre-fetch the PR data,
 and hand the synthesis a self-contained prompt.

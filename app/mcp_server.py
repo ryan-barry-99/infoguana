@@ -49,7 +49,7 @@ VALID_EDGE_TYPES = {
     "implements", "caused_by", "supersedes", "references",
     "bundled_with", "prerequisite_for",
 }
-# Plan #167. Trust labels for the captured claim.
+# Trust labels for the captured claim.
 VALID_CONFIDENCES = {"stated", "inferred", "speculative", "unspecified"}
 
 # Max hits a search/context call can expand into full bodies (rest stay as
@@ -85,7 +85,7 @@ def _note_dict(note, preview: bool = False) -> dict:
     search / similar), the `content` field carries a short
     haiku-generated summary instead of the full body — agents call
     get for the full text only on the hits they actually want to
-    read (plan #322). Falls back to first-line truncation if the preview
+    read. Falls back to first-line truncation if the preview
     column is unset for legacy rows. get / recent / add
     return values keep full content (preview=False)."""
     if preview:
@@ -112,7 +112,7 @@ def _note_dict(note, preview: bool = False) -> dict:
             if disp:
                 d["due_state"] = disp["bucket"]
                 d["due_in_days"] = disp["days_until"]
-    # Plan #167: surface trust dimension. Always include confidence (so
+    # Surface the trust dimension. Always include confidence (so
     # 'unspecified' is visibly ugly and discourages skipping); include the
     # free-text detail only when set.
     d["confidence"] = note.confidence
@@ -347,7 +347,7 @@ def infoguana_add(
     relative phrase ('today', 'tomorrow', 'in 3 days', 'in 2 weeks'). Stored
     without a time/TZ; "overdue" is computed in the user's local TZ.
 
-    **Provenance** (plan #167) — please fill these so future retrieval can
+    **Provenance** — please fill these so future retrieval can
     weight notes by source trust:
 
     - `confidence`: how this claim was sourced. One of:
@@ -538,7 +538,7 @@ def infoguana_update(
     string to clear an existing due date; pass None (omit) to leave it
     unchanged.
 
-    `confidence` and `provenance_note` (plan #167) update the trust
+    `confidence` and `provenance_note` update the trust
     metadata. Use this to upgrade a legacy 'unspecified' note once you know
     its source, or to correct an honest miss. Pass `provenance_note=""` to
     clear the free-text detail.
@@ -715,7 +715,7 @@ def infoguana_context(
     scoped to this project layer on top. Globals come first, then
     project-specific. Active plans/tasks pin next, then the BFS neighborhood.
 
-    Each note is returned as its haiku-generated preview (plan #322) with
+    Each note is returned as its haiku-generated preview with
     `preview: True` set on the dict. The 4000-token budget thus surfaces a
     wide neighborhood at low cost. Pass `expand_top=N` (max 5) to inline
     full bodies for the first N notes (active-plans pin first, then by

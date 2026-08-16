@@ -363,7 +363,7 @@ async def edit_from_form(
     If `type` is a manual choice, write it directly without dropping into
     'unsorted'. Tags / description are kept as-is. Content changes still
     trigger a re-embed so search stays consistent. This is the migration
-    path for plan #289 phase 3 (e.g. flipping a stale plan → task without
+    path for the tracked-work types (e.g. flipping a stale plan → task without
     nuking its metadata)."""
     existing = db.get_note(note_id)
     if not existing:

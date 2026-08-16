@@ -27,6 +27,14 @@ dev = [
     "pytest-asyncio>=0.24",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# rootdir on sys.path, so `from app import ...` and `from tests.conftest
+# import ...` both resolve without an editable install.
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+asyncio_mode = "auto"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

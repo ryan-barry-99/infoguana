@@ -554,12 +554,15 @@ def infoguana_update(
         confidence: stated|inferred|speculative|unspecified.
         provenance_note: Free-text source detail; '' clears.
     """
-    existing = db.get_note(id)
-    if not existing:
-        return {"error": "not found", "id": id}
+    # Validate the argument before the lookup: a bad type is wrong whether or
+    # not the id resolves, and checking first keeps this reachable without a
+    # database.
     if type is not None and type not in VALID_TYPES:
         return {"error": f"type must be one of {sorted(VALID_TYPES)} "
                          f"(got {type!r})", "id": id}
+    existing = db.get_note(id)
+    if not existing:
+        return {"error": "not found", "id": id}
     t: Optional[NoteType] = type  # type: ignore[assignment]
     if status is not None:
         if status not in VALID_PLAN_STATUSES:

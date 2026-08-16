@@ -17,7 +17,12 @@ dependencies = [
     "httpx>=0.27",
     "markdown-it-py>=3.0",
     "igraph>=0.11",
-    "mcp>=1.0",
+    # Upper bound is load-bearing: mcp 2.0 removed `mcp.server.fastmcp`,
+    # which app/mcp_server.py imports at module scope. With a bare
+    # `>=1.0` a fresh install resolves to 2.x and app.main, app.mcp_server
+    # and app.routes.chat all fail to import. Lifting this means porting
+    # to the 2.x server API, not just relaxing the pin.
+    "mcp>=1.0,<2",
     "numpy>=1.26",
 ]
 
@@ -26,6 +31,14 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# rootdir on sys.path, so `from app import ...` and `from tests.conftest
+# import ...` both resolve without an editable install.
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -31,6 +31,24 @@ def _first_party_modules() -> list[str]:
     return sorted(m.name for m in pkgutil.walk_packages(app.__path__, "app."))
 
 
+def test_module_enumeration_found_the_entrypoints() -> None:
+    """Guard the enumeration itself.
+
+    If `app` ever resolves to a namespace package, gets shadowed, or the
+    walk otherwise yields nothing, `_first_party_modules` returns an
+    empty list and the parametrized test below is *skipped* rather than
+    failed — an empty parametrize list is not an error, so the whole
+    import sweep would vanish on a green run.
+
+    Asserting on the two entrypoints rather than a module count: they
+    are the things the module docstring claims a bare checkout can
+    actually run, and unlike a threshold they do not need revisiting
+    every time a module is added or removed.
+    """
+    modules = _first_party_modules()
+    assert {"app.main", "app.mcp_server"} <= set(modules)
+
+
 @pytest.mark.parametrize("module", _first_party_modules())
 def test_module_imports_without_deployment_env(module: str) -> None:
     """Import must not require `.env`, `data/` or an editable install."""

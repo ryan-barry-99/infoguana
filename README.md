@@ -341,8 +341,17 @@ looks like a networking bug.
 
 Codex records a trust hash per hook and ignores hooks it hasn't been
 told to trust, so the `SessionStart` hook stays inert until you accept
-it in the Codex UI. MCP tools work either way; the auto-injected project
-context is what's gated.
+it in the Codex UI. Interactively, MCP tools work either way — the
+auto-injected project context is what that trust gates.
+
+Non-interactive `codex exec` is stricter, and the difference matters if
+you script an agent: there, tool calls are refused outright with "user
+cancelled MCP tool call" and hooks do not run, since neither approval
+nor hook trust can be granted with nobody watching. Setting
+`default_tools_approval_mode` (below) did not lift it in 0.145.0. The
+escape hatches are `--dangerously-bypass-approvals-and-sandbox` and
+`--dangerously-bypass-hook-trust`, which are as dangerous as they sound
+— the first also disables sandboxing for model-generated shell commands.
 
 ### Stop the per-call approval prompts
 

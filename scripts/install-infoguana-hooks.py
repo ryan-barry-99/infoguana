@@ -26,10 +26,16 @@ right for a ~22KB blob and silently wrong once the largest reached
 mid-rule. Set INFOGUANA_HOOK_CHUNKS to override (1..128); the installer
 prints any project that still won't fit.
 
-Re-running is a no-op for unchanged state: existing entries for this
-hook script are stripped (matched by script path) and re-registered
-with the resolved count. A changed count removes the old entries and
-registers the new ones, so re-run this after the corpus grows.
+Re-running is a no-op for unchanged state: existing entries for any
+infoguana hook script are stripped (matched by script *name*, so a moved
+or duplicated checkout's entries are replaced rather than left to
+accumulate alongside) and re-registered with the resolved count. A
+changed count removes the old entries and registers the new ones, so
+re-run this after the corpus grows.
+
+If the config already registers hooks from a different checkout, the
+installer asks before repointing them, and refuses outright when there
+is no TTY — pass --force (or --yes) to replace them unattended.
 
 The hook command is registered as `{sys.executable} {abs_hook_path} i N`
 — absolute paths to both the Python interpreter and the hook script, so
@@ -41,6 +47,7 @@ Usage:
     # then restart Claude Code
 
     INFOGUANA_HOOK_CHUNKS=20 python scripts/install-infoguana-hooks.py
+    python scripts/install-infoguana-hooks.py --force   # unattended
 """
 from __future__ import annotations
 
@@ -139,11 +146,6 @@ def main() -> int:
         print(f"           sudo chown -R $USER:$USER {REPO_DIR / 'data'}",
               file=sys.stderr)
         return 1
-    env_status = ensure_infoguana_env(token, base_url)
-
-    n, sizing = resolve_chunks(base_url, token, override,
-                               lambda m: print(m, file=sys.stderr))
-
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     if not SETTINGS.exists():
         SETTINGS.write_text("{}")
@@ -154,9 +156,22 @@ def main() -> int:
 
     # An integration already pointing at a different checkout is replaced
     # only with the user's say-so — it may be the one they actually use.
+    #
+    # Asked *before* ensure_infoguana_env, and the order is load-bearing:
+    # ~/.infoguana.env lives in $HOME and is shared by every checkout, so
+    # writing it first meant a refused install had already repointed the
+    # other checkout's still-registered hooks at this server with this
+    # bearer. That is the same takeover the guard exists to prevent, just
+    # via the credential instead of the registration — and the installer
+    # said it had refused while it happened.
     others = other_install_dirs(_registered_commands(hooks), HOOK.parent)
     if not confirm_replacement(SETTINGS, others, HOOK.parent, force):
         return 1
+
+    env_status = ensure_infoguana_env(token, base_url)
+
+    n, sizing = resolve_chunks(base_url, token, override,
+                               lambda m: print(m, file=sys.stderr))
 
     for event in ("SessionStart", "UserPromptSubmit"):
         if event in hooks:

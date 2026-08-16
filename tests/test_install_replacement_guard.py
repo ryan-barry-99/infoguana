@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,31 @@ def test_a_quoted_path_is_still_matched(setup):
     assert setup.other_install_dirs(cmds, OURS) == {"/tmp/a b/scripts"}
 
 
+def test_a_wrapped_command_is_reported_and_not_just_stripped(setup):
+    """Detection and stripping have to agree, or an entry gets deleted
+    without the user ever being asked about it.
+
+    `is_infoguana_hook` decides what gets stripped; `other_install_dirs`
+    decides whether to prompt. While the first was a substring test and
+    the second required the script path to be its own shell token, any
+    wrapper form — `sh -c`, `nohup`, `timeout`, an env shim — was owned
+    by one and invisible to the other, so it was removed silently."""
+    cmd = f"sh -c 'exec {OTHER / 'infoguana-onboard-chunk.py'} 0 17'"
+    assert setup.is_infoguana_hook(cmd)
+    assert setup.other_install_dirs([cmd], OURS) == {str(OTHER)}
+
+
+def test_ownership_and_detection_never_disagree(setup):
+    """The invariant behind the bug above, stated directly: anything we
+    would strip is something we can name a directory for."""
+    for cmd in [_cmd(OTHER, "0", "3"),
+                f"sh -c 'exec {OTHER / 'infoguana-onboard-chunk.py'} 0 3'",
+                f"nohup {OTHER / 'infoguana-first-turn.sh'}",
+                f'"/usr/bin/python3 {OTHER / "infoguana-onboard-chunk.py"} 0 2"']:
+        assert setup.is_infoguana_hook(cmd) is (setup.hook_dir(cmd) is not None)
+        assert setup.hook_dir(cmd) == str(OTHER)
+
+
 # --- the confirmation ----------------------------------------------------
 
 def test_nothing_to_replace_never_prompts(setup):
@@ -123,6 +149,23 @@ def test_an_interactive_answer_decides(setup, monkeypatch, answer, expected):
     assert setup.confirm_replacement(Path("/x"), {str(OTHER)}, OURS,
                                      force=False, prompt=lambda _: answer,
                                      out=lambda _: None) is expected
+
+
+@pytest.mark.parametrize("exc", [EOFError, KeyboardInterrupt])
+def test_an_abandoned_prompt_declines(setup, monkeypatch, exc):
+    """Ctrl-D and Ctrl-C are declines. Letting them escape put a traceback
+    where a decline belonged, which reads as a broken installer — and the
+    obvious next move is --force, which is the opposite of declining."""
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+
+    def abandon(_):
+        raise exc
+
+    said = []
+    assert setup.confirm_replacement(Path("/x"), {str(OTHER)}, OURS,
+                                     force=False, prompt=abandon,
+                                     out=said.append) is False
+    assert any("leaving the existing integration alone" in s for s in said)
 
 
 # --- end to end through the Claude Code installer's strip ----------------
@@ -172,3 +215,83 @@ def test_registered_commands_walks_every_event(hooks_installer):
     }
     assert set(hooks_installer._registered_commands(hooks)) == {
         _cmd(OTHER, "0", "3"), "echo hi"}
+
+
+def test_a_refused_install_leaves_the_shared_env_file_alone(
+        hooks_installer, setup, tmp_path, monkeypatch):
+    """Refusing has to mean nothing changed.
+
+    `~/.infoguana.env` lives in $HOME and is shared by every checkout, so
+    writing it before asking meant a refused install had already pointed
+    the *other* checkout's still-registered hooks at this server with
+    this bearer. That is the same takeover the guard exists to prevent,
+    reached through the credential instead of the registration — and the
+    installer printed a refusal while it happened.
+    """
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"SessionStart": [
+        {"hooks": [{"type": "command", "command": _cmd(OTHER, "0", "3")}]}]}}))
+    monkeypatch.setattr(hooks_installer, "SETTINGS", settings)
+    monkeypatch.setattr(hooks_installer, "HOOK",
+                        OURS / "infoguana-onboard-chunk.py")
+    monkeypatch.setattr(hooks_installer, "resolve_credentials",
+                        lambda _repo: ("tok", "http://x:8789"))
+
+    wrote = []
+    monkeypatch.setattr(hooks_installer, "ensure_infoguana_env",
+                        lambda *a, **k: wrote.append(a) or "written")
+    monkeypatch.setattr(hooks_installer, "resolve_chunks",
+                        lambda *a, **k: (2, {"projects": [], "fits_all": True}))
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys, "argv", ["install-infoguana-hooks.py"])
+
+    assert hooks_installer.main() == 1
+    assert wrote == [], "credential file rewritten despite refusing the install"
+    # And the registration it refused to replace is still intact.
+    assert _cmd(OTHER, "0", "3") in settings.read_text()
+
+
+# --- end to end through the Codex installer's TOML ------------------------
+
+@pytest.fixture(scope="module")
+def codex_installer():
+    spec = importlib.util.spec_from_file_location(
+        "install_infoguana_codex", REPO / "scripts" / "install-infoguana-codex.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_codex_commands_are_decoded_out_of_their_toml_quoting(codex_installer):
+    """The values are written with json.dumps, so the raw form is one
+    quoted string. Handed over undecoded, shlex read the whole line as a
+    single token whose basename was `...chunk.py 0 2` — matching no hook
+    name, so detection always came back empty."""
+    block = codex_installer.render_block("http://x:8789", 2)
+    cmds = codex_installer._registered_commands(block)
+    assert cmds, "no hook commands found in the managed block"
+    for cmd in cmds:
+        assert not cmd.startswith('"')
+        assert Path(cmd.split()[1]).name in ("infoguana-onboard-chunk.py",)
+
+
+def test_the_codex_guard_sees_another_checkout(codex_installer, setup):
+    """The whole point of the guard, on the path where it never fired:
+    detection failed while `_is_ours` (a substring test) still replaced
+    the entries, so the Codex installer took over another checkout's
+    integration without asking."""
+    block = codex_installer.render_block("http://x:8789", 2)
+    foreign = block.replace(str(OURS), str(OTHER))
+    cmds = codex_installer._registered_commands(foreign)
+    assert setup.other_install_dirs(cmds, OURS) == {str(OTHER)}
+
+
+def test_hooks_after_the_managed_block_are_not_confronted(codex_installer, setup):
+    """splice never rewrites anything past END, so a hook out there is
+    not ours to replace and must not block the install."""
+    block = codex_installer.render_block("http://x:8789", 1)
+    trailing = (block + "\n[[hooks.SessionStart]]\n"
+                "[[hooks.SessionStart.hooks]]\n"
+                f'command = "{OTHER / "infoguana-onboard-chunk.py"} 0 1"\n')
+    cmds = codex_installer._registered_commands(trailing)
+    assert setup.other_install_dirs(cmds, OURS) == set()

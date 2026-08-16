@@ -197,13 +197,37 @@ def _is_ours(segments: list[tuple[str, list[str]]], entry: list[int]) -> bool:
 
 
 def _registered_commands(existing: str) -> list[str]:
-    """Every hook command in the managed block, for relocation detection."""
+    """Every hook command in the managed block, for relocation detection.
+
+    Values are decoded out of their TOML quoting first. `render_block`
+    writes `command` with json.dumps, so the raw form is a single quoted
+    string; handed over as-is, shlex reads the whole line as one token
+    whose basename is `infoguana-onboard-chunk.py 0 2` and nothing ever
+    matched HOOK_SCRIPT_NAMES. Detection therefore always came back
+    empty while `_is_ours` — which uses a substring test — happily
+    replaced the other checkout's hooks: the guard never fired on the
+    Codex path at all.
+
+    The scan also stops at END rather than running to end of file, so
+    hook tables *after* the managed block (which splice never rewrites,
+    and which are therefore not ours to confront the user about) do not
+    count as another checkout's.
+    """
     start = existing.find(BEGIN)
     if start == -1:
         return []
-    segments = _segments(existing[start:])
-    return [_value(lines, "command") for header, lines in segments
-            if header == "[[hooks.SessionStart.hooks]]"]
+    end = existing.find(END, start)
+    body = existing[start:end + len(END)] if end != -1 else existing[start:]
+    out: list[str] = []
+    for header, lines in _segments(body):
+        if header != "[[hooks.SessionStart.hooks]]":
+            continue
+        raw = _value(lines, "command")
+        try:
+            out.append(json.loads(raw))
+        except ValueError:          # literal string, or a hand-edit
+            out.append(raw)
+    return out
 
 
 def _segments(body: str) -> list[tuple[str, list[str]]]:
@@ -386,16 +410,23 @@ def main() -> int:
         print(block, end="")
         return 0
 
-    env_status = ensure_infoguana_env(token, base_url)
-
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     existing = CONFIG.read_text() if CONFIG.exists() else ""
 
     # An integration already pointing at a different checkout is replaced
     # only with the user's say-so — it may be the one they actually use.
+    #
+    # Asked *before* ensure_infoguana_env, and the order is load-bearing:
+    # ~/.infoguana.env lives in $HOME and is shared by every checkout, so
+    # writing it first meant a refused install had already repointed the
+    # other checkout's still-registered hooks at this server with this
+    # bearer. That is the same takeover the guard exists to prevent, just
+    # via the credential instead of the registration.
     others = other_install_dirs(_registered_commands(existing), HOOK.parent)
     if not confirm_replacement(CONFIG, others, HOOK.parent, args.force):
         return 1
+
+    env_status = ensure_infoguana_env(token, base_url)
 
     updated = splice(existing, block)
 
@@ -435,8 +466,11 @@ def main() -> int:
     print()
     print("2. Approve the SessionStart hook in the Codex UI. Codex tracks a")
     print("   trust hash per hook and ignores ones it hasn't been told to")
-    print("   trust, so it stays inert until accepted. MCP tools work either")
-    print("   way; the auto-injected project context is what's gated.")
+    print("   trust, so it stays inert until accepted. Interactively, MCP")
+    print("   tools work either way; the auto-injected project context is")
+    print("   what's gated. Non-interactive `codex exec` is stricter — it")
+    print("   refuses MCP tool calls and does not run hooks at all. See the")
+    print("   Codex section of README.md before scripting one.")
     print()
     print("Verify with:  codex mcp list   (infoguana, Auth: Bearer token)")
     return 0

@@ -393,9 +393,51 @@ HOOK_SCRIPT_NAMES = (
 )
 
 
+def hook_dir(command: str) -> str | None:
+    """The directory of the infoguana hook `command` runs, or None.
+
+    One extraction answers both questions the installer asks — "is this
+    ours to strip?" and "whose checkout is it?" — because answering them
+    with two different matchers is a silent-deletion bug. A looser
+    ownership test than detection test means a command can be stripped
+    without ever being reported: `is_infoguana_hook` used to be a plain
+    substring scan while detection required the script path to be its own
+    shell token, so `sh -c "exec /other/checkout/.../hook.py 0 16"` was
+    deleted without the user ever being asked. Now the set of commands
+    that get stripped is by construction the set that gets reported.
+    """
+    # Split the way the shell will. Scanning for the script name and
+    # walking back to the previous space instead loses everything before
+    # the space in a quoted path that contains one — which is exactly the
+    # case the quoting is there to handle.
+    try:
+        tokens = shlex.split(command)
+    except ValueError:              # unbalanced quotes in a hand-edit
+        tokens = command.split()
+    for tok in tokens:
+        if Path(tok).name in HOOK_SCRIPT_NAMES:
+            return str(Path(tok).parent)
+    # Fallback for commands where the path is not its own token: a
+    # wrapper (`sh -c`, `nohup`, `timeout`, an env shim), or a value
+    # still carrying its config quoting. Walk back from the script name
+    # to the nearest separator. Less precise than tokenising, which is
+    # why it is second — but it must exist, because these commands are
+    # stripped either way and a directory we cannot name is still a
+    # directory the user should be told about.
+    for name in HOOK_SCRIPT_NAMES:
+        idx = command.find(name)
+        if idx == -1:
+            continue
+        start = idx
+        while start > 0 and command[start - 1] not in " \t\"'":
+            start -= 1
+        return str(Path(command[start:idx + len(name)]).parent)
+    return None
+
+
 def is_infoguana_hook(command: str) -> bool:
     """True when `command` runs an infoguana hook from any checkout."""
-    return any(name in command for name in HOOK_SCRIPT_NAMES)
+    return hook_dir(command) is not None
 
 
 def other_install_dirs(commands: Iterable[str], ours: Path) -> set[str]:
@@ -408,19 +450,9 @@ def other_install_dirs(commands: Iterable[str], ours: Path) -> set[str]:
     """
     found: set[str] = set()
     for cmd in commands:
-        # Split the way the shell will. Scanning for the script name and
-        # walking back to the previous space instead loses everything
-        # before the space in a quoted path that contains one — which is
-        # exactly the case the quoting is there to handle.
-        try:
-            tokens = shlex.split(cmd)
-        except ValueError:          # unbalanced quotes in a hand-edit
-            tokens = cmd.split()
-        for tok in tokens:
-            if Path(tok).name in HOOK_SCRIPT_NAMES:
-                parent = str(Path(tok).parent)
-                if parent != str(ours):
-                    found.add(parent)
+        parent = hook_dir(cmd)
+        if parent is not None and parent != str(ours):
+            found.add(parent)
     return found
 
 
@@ -450,7 +482,15 @@ def confirm_replacement(target: Path, others: set[str], ours: Path,
         out("error: refusing to replace an existing integration "
             "non-interactively. Re-run with --force if that is what you want.")
         return False
-    return prompt("  replace them? [y/N] ").strip().lower() in ("y", "yes")
+    try:
+        return prompt("  replace them? [y/N] ").strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        # Ctrl-D and Ctrl-C are declines, not crashes. A traceback out of
+        # a confirmation prompt reads as a broken installer, and the next
+        # thing the user reaches for is --force to make it stop.
+        out("")
+        out("error: no answer given; leaving the existing integration alone.")
+        return False
 
 
 def quote(s: str) -> str:

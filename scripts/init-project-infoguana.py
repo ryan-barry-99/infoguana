@@ -31,7 +31,20 @@ AGENT_FILES = {"claude": ["CLAUDE.md"], "codex": ["AGENTS.md"],
 def main() -> int:
     argv = sys.argv[1:]
     agent = "claude"
-    if "--agent" in argv:
+    # Both spellings, because `--agent=codex` is standard for long options
+    # and the space-only form swallowed it as the positional target dir —
+    # failing with "target dir does not exist: --agent=codex" while
+    # silently defaulting the agent back to claude.
+    inline = [a for a in argv if a.startswith("--agent=")]
+    if inline:
+        value = inline[0].split("=", 1)[1]
+        if value not in AGENT_FILES:
+            print(f"error: --agent must be one of {', '.join(AGENT_FILES)}",
+                  file=sys.stderr)
+            return 2
+        agent = value
+        argv = [a for a in argv if not a.startswith("--agent=")]
+    elif "--agent" in argv:
         i = argv.index("--agent")
         if i + 1 >= len(argv) or argv[i + 1] not in AGENT_FILES:
             print(f"error: --agent must be one of {', '.join(AGENT_FILES)}",

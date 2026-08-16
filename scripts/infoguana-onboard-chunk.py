@@ -126,10 +126,21 @@ def main() -> int:
         # — they go to the hook log for whoever maintains this, not into
         # the agent's context. An agent told "chunk 8/46 failed" cannot do
         # anything with 8 or 46; it can only re-fetch its memory, so that
-        # is all the notice asks for. Repeating it per failed slice is
-        # harmless: identical sentences read as one fact.
+        # is all the notice asks for.
+        #
+        # Only slice 0 emits it. An outage fails every slice at once, so
+        # per-slice emission multiplies one 127 B sentence by the whole
+        # registered count — ~2.2 KB at 17 chunks, ~9 KB at 71 — inside a
+        # delivery path whose entire premise is a ~1.7 KB per-hook budget.
+        # The stderr line stays on every slice, so the operator log still
+        # shows exactly which ones failed. The tradeoff is that a lone
+        # failure of some slice other than 0 is now silent to the agent;
+        # that case is rare next to the whole-server outage, and it is the
+        # case where the rest of the brief did arrive intact.
         print(f"infoguana: chunk {index + 1}/{total} failed for project "
               f"{project!r}: {type(e).__name__}: {e}", file=sys.stderr)
+        if index != 0:
+            return 0
         return _emit(
             "_Part of this project's memory failed to load. Call "
             "`context(project=...)` for the full set before relying on "

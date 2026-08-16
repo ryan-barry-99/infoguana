@@ -23,7 +23,7 @@ the largest project's blob and registers enough chunks to keep every
 slice under the inline cap. Hardcoding is what broke it before — 16 was
 right for a ~22KB blob and silently wrong once the largest reached
 ~59KB, at which point each slice ran ~2x over cap and lost its tail
-mid-rule. Set INFOGUANA_HOOK_CHUNKS to override (1..64); the installer
+mid-rule. Set INFOGUANA_HOOK_CHUNKS to override (1..128); the installer
 prints any project that still won't fit.
 
 Re-running is a no-op for unchanged state: existing entries for this
@@ -182,7 +182,7 @@ def main() -> int:
             print(f"derived from largest blob: {biggest['project']} "
                   f"({biggest['bytes']} B) / {target} B per chunk")
         # Name the projects that would still lose content, so a corpus
-        # that has outgrown even the 64-chunk ceiling is stated outright
+        # that has outgrown even the chunk route's ceiling is stated outright
         # rather than left to show up as garbled context later. Compares
         # the server's measured `needed`, not a byte estimate — the two
         # disagree, and the estimate is the optimistic one.

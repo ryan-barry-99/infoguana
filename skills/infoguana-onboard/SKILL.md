@@ -1,19 +1,25 @@
 ---
 name: infoguana-onboard
-description: Write a minimal project-level CLAUDE.md that delegates memory to the shared infoguana MCP server. Use when the user wants to onboard a project to infoguana, set up infoguana memory for a new repo, initialize a fresh Claude Code project with infoguana-first memory, or slim a bloated CLAUDE.md down to a pointer. Outputs a ~12-line file so CLAUDE.md does not tax the context window on every session.
+description: Write a minimal project-level instruction file (CLAUDE.md for Claude Code, AGENTS.md for Codex) that delegates memory to the shared infoguana MCP server. Use when the user wants to onboard a project to infoguana, set up infoguana memory for a new repo, initialize a fresh project with infoguana-first memory under any agent, or slim a bloated CLAUDE.md down to a pointer. Outputs a ~12-line file so the instruction file does not tax the context window on every session.
 ---
 
 # Infoguana Onboard
 
-Creates a minimal project-level `CLAUDE.md` that delegates memory to the shared **infoguana** MCP server. The file is a *pointer* to infoguana protocol (which lives in the SessionStart hook preamble), not a restatement of it — keeping per-session context small.
+Creates a minimal project-level instruction file that delegates memory to the shared **infoguana** MCP server. The file is a *pointer* to infoguana protocol (which lives in the SessionStart hook preamble), not a restatement of it — keeping per-session context small.
 
 ## When to use
 
 - User asks to "onboard this project to infoguana" / "set up infoguana for this repo" / "write an infoguana CLAUDE.md"
-- A fresh project needs its Claude Code memory folder initialized with infoguana-first protocol
+- A fresh project needs infoguana-first protocol wired up for whichever agent will read it
 - An existing project has a bloated `CLAUDE.md` that should be slimmed to just-a-pointer
 
-## Where the file goes
+## Which agent, and where the file goes
+
+**Ask first if it is not obvious from the session:** Claude Code, Codex, or both. The two read different filenames from different places, and writing the wrong one fails silently — the agent simply never loads it and the project looks like it has no infoguana wiring at all.
+
+**Codex** has no per-project user-private memory directory. Its instruction file is `AGENTS.md` in the **repo root**, which means it is committed and shared with collaborators. There is no private variant to offer; if the user wants it uncommitted, that is a `.gitignore` decision, not a different path. For that case — and for a committed `CLAUDE.md` — [`scripts/init-project-infoguana.py`](../../scripts/init-project-infoguana.py) already stamps the same template with `--agent claude|codex|both`; prefer it over doing the work by hand.
+
+**Claude Code** is the user-private path described below, and it is the rest of this skill. Steps 4-9 are Claude-Code-specific; for Codex, write the step-8 body into `<repo-root>/AGENTS.md` and skip the slug, the memory folder, and the step-6 migration (there is nothing to migrate — that directory is a Claude Code concept).
 
 This skill writes a **user-private** `CLAUDE.md` into Claude Code's project data folder for the current cwd:
 
@@ -81,7 +87,7 @@ If the user wants the file *committed to the repo* instead (so collaborators who
    - **Reading:** SessionStart already calls `context` — read its hits before acting. On any "how does X work / state of Y / explain Z" question, `search` first before reading source or dispatching Explore agents. Only touch source to verify a specific line or fill a clear gap.
    - **Previews vs full bodies:** `search` / `similar` / `context` return haiku previews (marked `preview: True`) for triage. They tell you which notes to read; they are NOT safe to cite. Before stating a fact, decision, or recommendation anchored on a preview, fetch the full body via `get(id)` / `get_many(ids=[...])` / `expand_top=N`.
    - **Writing:** `add(project="<PROJECT NAME>", ...)` whenever you learn something worth retaining. Prefer `update` over near-duplicates.
-   - **Do not write to the local `memory/` dir.** This `CLAUDE.md` is the only file that belongs in `memory/`.
+   - **Do not write memory files alongside this one.** This pointer file is the only instruction file this project needs; everything else belongs in infoguana.
 
    Full infoguana-protocol guidance (good/bad memory examples, when-to-save rules) is in the SessionStart preamble — no need to restate it here.
    ```
@@ -106,7 +112,7 @@ This is automatic — only present when an archive folder was actually created.
 
 ## Source of truth
 
-The canonical template lives at [`docs/CLAUDE.md.template`](../../docs/CLAUDE.md.template) in infoguana repo. The CLI equivalent of this skill is [`scripts/init-project-infoguana.py`](../../scripts/init-project-infoguana.py), which stamps the same template into the **repo root** (for cases where the file should be committed). If the template changes, update this skill to match.
+The canonical template lives at [`docs/CLAUDE.md.template`](../../docs/CLAUDE.md.template) in infoguana repo — it is agent-neutral despite the filename, and is stamped as `CLAUDE.md`, `AGENTS.md`, or both. The CLI equivalent of this skill is [`scripts/init-project-infoguana.py`](../../scripts/init-project-infoguana.py), which stamps it into the **repo root** (for cases where the file should be committed) and takes `--agent claude|codex|both`. If the template or that script's agent handling changes, update this skill to match.
 
 ## Related
 

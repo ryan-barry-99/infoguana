@@ -31,9 +31,12 @@ CHUNK_TARGET_BYTES = 1700
 
 # Upper bound on hook entries the chunk route will serve. Not a harness
 # limit — a sanity bound on how many subprocesses a session start should
-# spawn. Raised 64 -> 128 once the largest project needed 74: the old
-# value had drifted from "far above anything real" to "exactly the
-# requirement", which is how a sanity bound turns into silent truncation.
+# spawn. Raised 64 -> 128 once the largest project needed 74 at
+# budget_tokens=16000: the old value had drifted from "far above anything
+# real" to "exactly the requirement", which is how a sanity bound turns
+# into silent truncation. Blob size scales with the budget, so every
+# figure in this module names the budget it was measured at — the same
+# corpus needs only 17 chunks at the 4000-token default.
 # A surplus entry is a no-op (empty slice, hook emits nothing), so the
 # cost of headroom is one wasted subprocess; the cost of shortfall is
 # lost rules. Re-derive with the installer as the corpus grows.
@@ -149,10 +152,10 @@ def chunks_needed(blob: str) -> int:
     `ceil(total / target)` bounds only the *average* slice: interior
     boundaries snap backward to a line start, which pushes those bytes
     forward into the following slice, so one long line can push a single
-    slice past the even split by its own length. Concretely,
-    one 77,679 B blob at the ceil-derived 46 still
-    produced a 2,288 B worst slice against a ~2,048 B cap — the average
-    was fine and one slice was over anyway.
+    slice past the even split by its own length. Concretely, one 77,679 B
+    blob (budget_tokens=16000) at the ceil-derived 46 still produced a
+    2,288 B worst slice against a ~2,048 B cap — the average was fine and
+    one slice was over anyway.
 
     Returns MAX_CHUNKS (the route's ceiling) if even that can't satisfy the
     target; callers report the shortfall rather than silently accepting
@@ -177,10 +180,11 @@ def _chunks_fitting(blobs: list[str]) -> int:
     against all of them together. Taking each project's own minimum and
     then the max across projects is not equivalent and not safe: whether a
     slice fits depends on where line boundaries happen to fall, so the
-    property is NOT monotonic in n. One real blob fits at n=49
-    and then *regresses* to an 1,845 B worst slice at n=62 — a count
-    derived as "the largest per-project minimum" therefore silently broke
-    a project that had already been fine at a smaller count.
+    property is NOT monotonic in n. One real blob (budget_tokens=16000)
+    fits at n=49 and then *regresses* to an 1,845 B worst slice at n=62 —
+    a count derived as "the largest per-project minimum" therefore
+    silently broke a project that had already been fine at a smaller
+    count.
 
     Returns MAX_CHUNKS if even the ceiling can't satisfy every blob; callers
     report the shortfall rather than accept over-cap slices quietly.
@@ -279,31 +283,45 @@ def onboard_chunk(project: str, index: int, of: int = 16,
     blob = onboard.build_cached(project=project, budget_tokens=budget_tokens)
     chunks = _line_aligned_chunks(blob, of)
     body = chunks[index]
-    if index == 0:
-        # Measure the split actually being served, not the smallest count
-        # that would work. Fit is not monotonic in n (see _chunks_fitting):
-        # boundaries snap backward to a line start, so a blob that fits at
-        # 35 can regress at 36, and `needed <= of` therefore does not mean
-        # this split fits. Every project in the current corpus has some
-        # `of` at or above its own `needed` at which slices run 1.7-2.4 KB
-        # against the cap — which is to say the old guard was silent for
-        # all of them.
-        widest = max((len(c.encode("utf-8")) for c in chunks), default=0)
-        if widest > CHUNK_TARGET_BYTES:
-            needed = chunks_needed(blob)
+    # Measure the split actually being served, not the smallest count that
+    # would work. Fit is not monotonic in n (see _chunks_fitting):
+    # boundaries snap backward to a line start, so a blob that fits at 35
+    # can regress at 36, and `needed <= of` therefore does not mean this
+    # split fits. At budget_tokens=16000 every project in the current
+    # corpus has some `of` at or above its own `needed` at which slices run
+    # 1.7-2.4 KB against the cap — which is to say the old guard was silent
+    # for all of them.
+    sizes = [len(c.encode("utf-8")) for c in chunks]
+    widest = max(sizes, default=0)
+    if widest > CHUNK_TARGET_BYTES:
+        if index == 0:
+            # Logged once per delivery, not once per slice: the operator
+            # needs the fact, not `of` copies of it.
             log.warning(
                 "onboard delivery undersized for %s: %d chunks registered, "
                 "%d needed for %d B — widest slice is %d B against a %d B "
                 "cap, so slices are being truncated. Re-run "
                 "scripts/install-infoguana-hooks.py to re-derive the count.",
-                project, of, needed, len(blob.encode("utf-8")),
-                widest, CHUNK_TARGET_BYTES,
+                project, of, chunks_needed(blob),
+                len(blob.encode("utf-8")), widest, CHUNK_TARGET_BYTES,
             )
-            body = (
+        # The notice has to pay for its own bytes. Prepending it to slice 0
+        # unconditionally is how a warning that content may be missing
+        # *causes* content to go missing: chunk 0 is frequently under the
+        # cap on its own but not by the notice's length, and its tail is
+        # where DEFAULT_PROTOCOL lives. Carry it on whichever slice has the
+        # most headroom, and only when that headroom is real — an
+        # undersized split is already logged, so a notice that cannot fit
+        # anywhere is dropped rather than allowed to evict content.
+        carrier = min(range(of), key=lambda i: sizes[i])
+        if index == carrier:
+            notice = (
                 "_Some of this project's memory may be missing from this "
                 "brief. Call `context(project=...)` for the full set before "
                 "relying on rules or plans._\n\n"
-            ) + body
+            )
+            if sizes[carrier] + len(notice.encode("utf-8")) <= CHUNK_TARGET_BYTES:
+                body = notice + body
     if not body:
         return ""
     return body if body.endswith("\n") else body + "\n"

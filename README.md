@@ -235,6 +235,13 @@ either agent unmodified. The hook adapts only its memory-override text, naming
 whichever built-in memory store to leave alone; force it with
 `INFOGUANA_AGENT=claude|codex` if autodetection guesses wrong.
 
+**If you are upgrading an existing install**, edit the stored protocol in
+the web UI once. Its opening line addresses the agent as Claude Code, and
+it is seeded only when absent — your deployment kept the wording it was
+first installed with, so a Codex session receives that opening alongside
+the Codex-specific memory-override text and has to reconcile the two.
+Fresh installs already carry agent-neutral wording.
+
 Two steps remain that the installer can't do for you.
 
 ### 1. Give Codex the bearer token

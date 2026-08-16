@@ -14,8 +14,9 @@ import os
 import shlex
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote_plus, urlparse, urlunparse
 
 ENV_FILE = Path.home() / ".infoguana.env"
 
@@ -269,6 +270,12 @@ FALLBACK_CHUNKS = 40
 # went stale when the route raised its bound.
 MAX_CHUNKS = 128
 
+# The onboard budget assumed when nothing sets INFOGUANA_ONBOARD_BUDGET.
+# Must match the hook's own default in infoguana-onboard-chunk.py and the
+# route's default in app/routes/onboard.py: sizing and delivery have to
+# measure the same blob, and a blob's size is a function of its budget.
+DEFAULT_ONBOARD_BUDGET = "4000"
+
 
 class SizingUnavailable(Exception):
     """The server could not report a measured chunk count.
@@ -299,8 +306,32 @@ def parse_chunk_override(raw: str | None) -> int | None:
     return n
 
 
-def fetch_sizing(base_url: str, token: str) -> dict:
+def resolve_onboard_budget() -> str:
+    """The onboard budget the installed hook will actually request.
+
+    Mirrors the hook's own resolution order exactly — process env first,
+    then ~/.infoguana.env, then the shared default — because sizing is
+    only meaningful if it measures the blob delivery will fetch. Returned
+    as a string: it is bound straight into a query param, and validating
+    it here would reject values the route itself accepts.
+    """
+    from_env = os.environ.get("INFOGUANA_ONBOARD_BUDGET")
+    if from_env:
+        return from_env
+    return parse_env_file(ENV_FILE).get(
+        "INFOGUANA_ONBOARD_BUDGET", DEFAULT_ONBOARD_BUDGET)
+
+
+def fetch_sizing(base_url: str, token: str,
+                 budget_tokens: str = DEFAULT_ONBOARD_BUDGET) -> dict:
     """Ask /onboard/sizing how many chunks the largest blob needs.
+
+    `budget_tokens` must be the budget the *hook* will request, not the
+    route's default. Blob size scales with the budget, so sizing at 4000
+    and delivering at 16000 registers a count derived from a different
+    document: measured against a 27-project corpus, 4000 needs 17 chunks
+    where 16000 needs 71, and the shortfall truncates roughly three
+    quarters of every slice at each session start.
 
     Raises SizingUnavailable rather than returning a sentinel, so the
     caller reports the actual cause. The non-JSON case is its own branch
@@ -311,7 +342,8 @@ def fetch_sizing(base_url: str, token: str) -> dict:
     reads as "the server is down" while the server is plainly answering,
     and re-running never clears it.
     """
-    url = f"{base_url.rstrip('/')}/onboard/sizing"
+    url = (f"{base_url.rstrip('/')}/onboard/sizing"
+           f"?budget_tokens={quote_plus(budget_tokens)}")
     try:
         with urllib.request.urlopen(authed_request(url, token), timeout=30) as resp:
             body = resp.read().decode("utf-8")
@@ -328,17 +360,18 @@ def fetch_sizing(base_url: str, token: str) -> dict:
 
 
 def resolve_chunks(base_url: str, token: str, override: int | None,
-                   warn) -> tuple[int, dict]:
+                   warn: Callable[[str], None]) -> tuple[int, dict]:
     """The chunk count to register, plus the sizing report behind it.
 
     `override` comes from parse_chunk_override. `warn` is called with a
     single message string when the count had to be guessed; the report is
-    empty in that case.
+    empty in that case. Sizing is requested at the budget the hook will
+    use (see resolve_onboard_budget), not the route's default.
     """
     if override is not None:
         return override, {}
     try:
-        sizing = fetch_sizing(base_url, token)
+        sizing = fetch_sizing(base_url, token, resolve_onboard_budget())
     except SizingUnavailable as e:
         warn(f"warning: {e}; registering {FALLBACK_CHUNKS} chunks.")
         return FALLBACK_CHUNKS, {}
@@ -346,9 +379,17 @@ def resolve_chunks(base_url: str, token: str, override: int | None,
 
 
 def quote(s: str) -> str:
-    """Quote a path/arg for inclusion in a shell command string. Handles
-    both POSIX sh and Windows cmd.exe — both treat double-quoted strings
-    as a single argument."""
-    if any(c in s for c in (" ", "\t", '"', "'", "(", ")", "&", "|", ";")):
-        return '"' + s.replace('"', r"\"") + '"'
-    return s
+    """Quote a path/arg for inclusion in a shell command string.
+
+    POSIX and cmd.exe cannot be served by one expression, so branch on the
+    platform rather than trying. Hand-rolled double-quoting got the POSIX
+    half wrong twice over: `$`, backtick and backslash were in neither the
+    trigger set nor the escape step, so a path containing `$` was emitted
+    bare and the shell expanded it away — leaving the hook pointed at a
+    path that does not exist, every slice silently empty — while a
+    backtick inside the double-quoted branch still ran a command
+    substitution at every session start. shlex handles every POSIX case.
+    """
+    if os.name == "nt":
+        return '"' + s + '"' if any(c in s for c in ' \t"') else s
+    return shlex.quote(s)

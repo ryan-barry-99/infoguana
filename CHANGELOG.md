@@ -33,8 +33,8 @@ entry below are recorded only in the commit history.
   a rule mid-sentence, instead of snapping to evenly-spaced line starts. The slice
   ceiling rose from 64 to 128.
 - The installers no longer register a fixed 16 hooks; the count comes from
-  `/onboard/sizing`, and `INFOGUANA_HOOK_CHUNKS` now validates a 1..64 range that
-  previously accepted anything.
+  `/onboard/sizing`, and `INFOGUANA_HOOK_CHUNKS` is now validated against the
+  route's accepted range where it previously accepted anything.
 - `scripts/init-project-infoguana.py` takes `--agent claude|codex|both`, writing
   `CLAUDE.md`, `AGENTS.md`, or the pair. Codex reads a different filename, so
   without this a Codex user had no way to wire up a project.
@@ -47,7 +47,8 @@ entry below are recorded only in the commit history.
 
 - A failed context slice is now visible in the session instead of silently absent.
   The hook injects a short notice naming the failure, so a partial load stops looking
-  identical to a complete one.
+  identical to a complete one. Only the first slice emits it — an outage fails every
+  slice at once, and one notice per slice cost more context than the brief it replaced.
 - `INFOGUANA_HOOK_DISABLE=1` now suppresses the memory-override slice too, not only
   the context slices. The web UI's chat seeds its own context and sets this, so it
   was receiving roughly 1KB of override text on every turn.
@@ -62,6 +63,13 @@ entry below are recorded only in the commit history.
   as fine while holding a readable bearer token.
 - An invalid `INFOGUANA_HOOK_CHUNKS` prints a one-line error from the Codex installer
   instead of an uncaught traceback.
+- The installers size their hook count at the budget the hook will actually request,
+  not the server's default. A custom `INFOGUANA_ONBOARD_BUDGET` changes how large the
+  blob is, so sizing that ignored it registered too few chunks and truncated most of
+  every slice.
+- The undersized-delivery notice no longer evicts the content it warns about. It rides
+  whichever slice has room rather than always the first, and is dropped when no slice
+  can carry it — the server log still records the shortfall.
 
 ## v0.1.0 — 2026-08-16
 

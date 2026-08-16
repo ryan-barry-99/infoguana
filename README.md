@@ -16,7 +16,7 @@ Infoguana is a typed graph of short notes with hybrid retrieval, designed to
 feed LLM agents only the slice of memory relevant to the current turn.
 
 **Notes have types and tags.** Every note is one of `memory`, `feedback`,
-`project`, `reference`, `plan`, `task`, `feature`, or `idea` — the type
+`rule`, `skill`, `reference`, `plan`, `task`, `feature`, or `idea` — the type
 changes how it's surfaced (e.g. `feedback` is sticky guidance the agent
 should re-read, `plan` and `task` enter a lifecycle, `reference` is a
 pointer). Tags are agent-curated at write time; `tag_suggest` ranks existing

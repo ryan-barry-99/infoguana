@@ -226,7 +226,8 @@ def browse_page(request: Request,
             "limit": limit,
             "all_projects": db.list_project_names(),
             "all_types": ["idea", "memory", "feedback", "feature",
-                          "reference", "plan", "task", "rule", "unsorted"],
+                          "reference", "plan", "task", "rule", "skill",
+                          "unsorted"],
         })
 
     # Normalize empty-string params from the form to None so SQL filters
@@ -301,7 +302,8 @@ def browse_page(request: Request,
         "collapsed": True,
         "all_projects": db.list_project_names(),
         "all_types": ["idea", "memory", "feedback", "feature",
-                      "reference", "plan", "task", "rule", "unsorted"],
+                      "reference", "plan", "task", "rule", "skill",
+                      "unsorted"],
     })
 
 

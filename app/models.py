@@ -3,7 +3,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
-NoteType = Literal["idea", "memory", "feedback", "feature", "reference", "plan", "task", "rule", "unsorted"]
+NoteType = Literal["idea", "memory", "feedback", "feature", "reference", "plan", "task", "rule", "skill", "unsorted"]
 PlanStatus = Literal["not_started", "pending", "complete"]
 # Plan #167. Trust dimension on captured claims. The agent fills this at
 # write time; 'unspecified' is the legacy/skipped default and is meant to

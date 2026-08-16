@@ -37,7 +37,8 @@ mcp = FastMCP(
 )
 
 
-VALID_TYPES = {"idea", "memory", "feedback", "feature", "reference", "plan", "task", "rule"}
+VALID_TYPES = {"idea", "memory", "feedback", "feature", "reference", "plan",
+               "task", "rule", "skill"}
 VALID_EDGE_TYPES = {
     "implements", "caused_by", "supersedes", "references",
     "bundled_with", "prerequisite_for",
@@ -181,7 +182,8 @@ def infoguana_search(
     Args:
         query: Natural language search query.
         limit: Max results to return (default 10).
-        type: Optional filter: idea|memory|feedback|feature|reference|plan.
+        type: Optional filter: idea|memory|feedback|feature|reference|plan|
+            task|rule|skill.
         project: Optional filter to a specific project name.
         include_edges: Attach typed-edge neighbors to each hit (default False).
         confirmed_only: When include_edges, skip unconfirmed agent-proposed
@@ -302,6 +304,13 @@ def infoguana_add(
     Rules have no lifecycle (no status). Reserve this type for explicit
     constraints the user has stated — don't infer rules from observed
     patterns.
+
+    Use type='skill' for a packaged procedure an agent follows in place of
+    its default approach — a SKILL.md document stored verbatim, whose
+    description says *when* to use it and whose body says *how*. Like
+    'rule', it is authored by hand and never assigned by the classifier.
+    Write one only when the user asks for it; a how-to you inferred belongs
+    in a 'reference' note instead.
 
     After the note saves, scan its content for relationships to existing
     notes — explicit `#NNN` references, "this supersedes the old decision",
@@ -505,7 +514,7 @@ def infoguana_update(
     Args:
         id: Note id (from search / recent results).
         content: New content (full replacement).
-        type: idea|memory|feedback|feature|reference|plan.
+        type: idea|memory|feedback|feature|reference|plan|task|rule|skill.
         project: Project to attribute the note to.
         tags: New tag list (full replacement — pass all tags you want kept).
         status: For plans only — not_started|pending|complete.
@@ -687,7 +696,7 @@ def infoguana_context(
         budget_tokens: Approximate token budget for returned notes (default 4000).
         max_hops: Cap on BFS depth (default 4).
         include_types: If set, only return notes of these types
-            (idea|memory|feedback|feature|reference|plan).
+            (idea|memory|feedback|feature|reference|plan|task|rule|skill).
         expand_top: Inline full bodies for this many top notes (default 0,
             max 5). Rest stay as previews.
     """

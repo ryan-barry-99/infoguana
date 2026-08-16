@@ -117,19 +117,30 @@ def test_browse_filter_offers_every_note_type(types: list[str]) -> None:
     assert set(types) == set(get_args(NoteType))
 
 
-@pytest.mark.parametrize("module_name", ["app.mcp_server", "app.classify"])
-def test_valid_types_are_declared_note_types(module_name: str) -> None:
-    """`VALID_TYPES` sets must not name a type `NoteType` lacks.
+@pytest.mark.parametrize("module_name,excluded", [
+    # `unsorted` is the classifier's default bucket, not something a caller
+    # should be able to filter or write by hand over MCP.
+    ("app.mcp_server", {"unsorted"}),
+    # The classifier must never assign `rule` or `skill` — both are authored
+    # deliberately — and never re-derive `unsorted`.
+    ("app.classify", {"rule", "skill", "unsorted"}),
+])
+def test_valid_types_are_declared_note_types(
+    module_name: str, excluded: set[str]
+) -> None:
+    """Each `VALID_TYPES` must be exactly `NoteType` minus its exclusions.
 
-    Subset, not equality, and deliberately so — both are narrower than
-    `NoteType` on purpose. `app.classify` excludes `rule` and `unsorted`
-    because the classifier must never assign them, and `app.mcp_server`
-    excludes `unsorted` from its search filter. What this catches is a
-    typo or a stale literal: a member here that no longer exists in the
-    enum, which in `mcp_server` coerces the filter to `None` and silently
-    returns unfiltered results.
+    Equality against a declared exclusion set, not a subset assertion. A
+    subset catches a stale literal — a member the enum no longer has — but
+    it cannot catch the opposite and more damaging case: a type added to
+    `NoteType` and forgotten here. That direction fails silently, because
+    every read site spells the filter `type if type in VALID_TYPES else
+    None`, and a `None` filter means "no filter" rather than "no matches";
+    the caller gets unfiltered results it believes were narrowed. Naming
+    the exclusions keeps the deliberate narrowing intact while making the
+    next added type fail loudly, and point at the constant to update.
     """
     import importlib
 
     valid = importlib.import_module(module_name).VALID_TYPES
-    assert set(valid) <= set(get_args(NoteType))
+    assert set(valid) == set(get_args(NoteType)) - excluded

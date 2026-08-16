@@ -6,9 +6,9 @@
 
 Use the shared **infoguana** MCP for all memory in this project. Project arg is always `<PROJECT NAME>`.
 
-- **Reading:** SessionStart already calls `context` — read its hits before acting. On any "how does X work / state of Y / explain Z" question, `search` first before reading source or dispatching Explore agents. Only touch source to verify a specific line or fill a clear gap.
+- **Reading:** If a SessionStart preamble delivered `context` hits, read them before acting. If none arrived — Codex before you approve the hook's trust hash, and `codex exec`, which runs no hooks at all — call `context(project="<PROJECT NAME>")` yourself first. On any "how does X work / state of Y / explain Z" question, `search` first before reading source or dispatching Explore agents. Only touch source to verify a specific line or fill a clear gap.
 - **Previews vs full bodies:** `search` / `similar` / `context` return haiku previews (marked `preview: True`) for triage. They tell you which notes to read; they are NOT safe to cite. Before stating a fact, decision, or recommendation anchored on a preview, fetch the full body via `get(id)` / `get_many(ids=[...])` / `expand_top=N`.
 - **Writing:** `add(project="<PROJECT NAME>", ...)` whenever you learn something worth retaining. Prefer `update` over near-duplicates.
 - **Do not write memory files alongside this one.** This pointer file is the only instruction file this project needs; everything else belongs in infoguana.
 
-Full infoguana-protocol guidance (good/bad memory examples, when-to-save rules) is in the SessionStart preamble — no need to restate it here.
+Full infoguana-protocol guidance (good/bad memory examples, when-to-save rules) arrives in the SessionStart preamble — no need to restate it here. If no preamble arrived, that guidance is in the protocol note the server serves; `context` returns it.

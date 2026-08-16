@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS notes (
     version     INTEGER NOT NULL DEFAULT 1,  -- bumped on every update_note; matches the live row's version number
     -- Trust dimension on the captured claim. 'stated' = user told
     -- me explicitly; 'inferred' = I derived it from a diff/PR/code; 'speculative'
-    -- = I extrapolated; 'unspecified' = pre-#167 or skipped. Never auto-promoted.
+    -- = I extrapolated; 'unspecified' = legacy rows from before this column
+    -- existed, or skipped at write time. Never auto-promoted.
     confidence       TEXT NOT NULL DEFAULT 'unspecified',
     -- Free-text source detail ("user statement 2026-04-21 chat", "inferred from
     -- PR #42 review", "web: example.com/foo"). Optional — confidence carries

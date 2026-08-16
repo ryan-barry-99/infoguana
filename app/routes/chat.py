@@ -349,7 +349,7 @@ def _seed_context(query: str, project: Optional[str] = None,
     the SessionStart preamble for project-local Claude Code sessions. This
     keeps the chat agent's view shape-identical to Claude Code's — same
     protocol intro, same `preview: True`-shaped note formatting — so rules
-    like #352 (previews are for triage, not citation) fire here too.
+    like "previews are for triage, not citation" fire here too.
     Otherwise fall back to a hybrid search seeded by the user's first
     message.
     """

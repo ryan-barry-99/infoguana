@@ -9,7 +9,7 @@ import time
 from app import db, graph
 
 
-# Per-project memoization of build() output. Note #374's chunked SessionStart
+# Per-project memoization of build() output. The chunked SessionStart
 # hooks fire 16 simultaneous GETs against /onboard/<project>/chunk/<i>; each
 # would otherwise call build() concurrently and race on the single shared
 # SQLite connection in db.py, producing InterfaceError / IndexError 500s.
@@ -117,7 +117,7 @@ near-duplicate it
 def build(project: str, budget_tokens: int = 4000) -> str:
     """Produce the plain-text blob that goes into additionalContext.
 
-    Note #374: the harness caps each hook's `additionalContext` at ~2KB
+    The harness caps each hook's `additionalContext` at ~2KB
     inline, but the cap is *per-hook*, not aggregate. The install script
     therefore registers N (default 16) UserPromptSubmit hook entries that
     each fetch a different line-aligned slice of this blob via

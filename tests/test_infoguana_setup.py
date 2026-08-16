@@ -168,6 +168,22 @@ def test_ensure_env_file_is_owner_only(setup_mod, env_file):
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
 
+def test_ensure_env_reasserts_the_mode_when_nothing_else_changed(setup_mod,
+                                                                 env_file):
+    """A drifted mode must be corrected by re-running the installer.
+
+    The mode used to be applied only as part of a write, so a file whose
+    permissions loosened — restored from a backup, copied out of a
+    dotfiles repo, recreated under a permissive umask — kept them while
+    the installer reported it up-to-date and the README promised 600.
+    """
+    setup_mod.ensure_infoguana_env("tok", "http://localhost:8789")
+    env_file.chmod(0o644)
+    msg = setup_mod.ensure_infoguana_env("tok", "http://localhost:8789")
+    assert "up-to-date" in msg, "expected the no-write path, not a rewrite"
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+
 def test_ensure_env_preserves_unrelated_lines(setup_mod, env_file):
     env_file.write_text("# my comment\nINFOGUANA_AGENT=codex\nOTHER=keep\n")
     setup_mod.ensure_infoguana_env("tok", "http://localhost:8789")

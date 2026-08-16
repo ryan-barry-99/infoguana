@@ -53,10 +53,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _infoguana_setup import (  # noqa: E402
+    FALLBACK_CHUNKS,
+    MAX_CHUNKS,
     atomic_write,
-    authed_request,
     ensure_infoguana_env,
+    parse_chunk_override,
     quote,
+    resolve_chunks,
     resolve_credentials,
 )
 
@@ -67,36 +70,11 @@ LEGACY_FIRST_TURN = REPO_DIR / "scripts" / "infoguana-first-turn.sh"
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
 
-# Used only when the server can't be reached to measure. Deliberately
-# generous: over-provisioning costs one no-op hook per surplus chunk
-# (the route returns "" and the hook emits nothing), while under-
-# provisioning silently truncates every slice.
-FALLBACK_CHUNKS = 40
-
 
 def _build_command(index: int, total: int) -> str:
     return (
         f"{quote(sys.executable)} {quote(str(HOOK))} {index} {total}"
     )
-
-
-def _fetch_sizing(base_url: str, token: str) -> dict:
-    """Ask the server how many chunks the largest project's blob needs.
-
-    Returns {} if the server is unreachable — the caller falls back to
-    FALLBACK_CHUNKS and says so. Deriving the count beats hardcoding it
-    because the blob only ever grows: the previous fixed 16 was set when
-    a blob ran ~22KB, and by the time the largest was ~59KB every slice
-    was ~2x over the inline cap with nothing reporting it.
-    """
-    url = f"{base_url.rstrip('/')}/onboard/sizing"
-    req = authed_request(url, token)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, OSError,
-            json.JSONDecodeError, KeyError):
-        return {}
 
 
 def _strip_existing(entries: list[dict], match_substrings: list[str]) -> list[dict]:
@@ -120,19 +98,13 @@ def main() -> int:
         print(f"error: hook script not found at {HOOK}", file=sys.stderr)
         return 1
 
-    override = os.environ.get("INFOGUANA_HOOK_CHUNKS")
-    if override is not None:
-        try:
-            n = int(override)
-        except ValueError:
-            print("error: INFOGUANA_HOOK_CHUNKS must be an integer", file=sys.stderr)
-            return 1
-        if n < 1 or n > 64:
-            print("error: INFOGUANA_HOOK_CHUNKS must be 1..64 (the chunk "
-                  "route's accepted range)", file=sys.stderr)
-            return 1
-    else:
-        n = 0  # resolved from /onboard/sizing once credentials are known
+    # Validated before any credential or network work, so a typo fails
+    # immediately instead of after a server round-trip.
+    try:
+        override = parse_chunk_override(os.environ.get("INFOGUANA_HOOK_CHUNKS"))
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
     try:
         token, base_url = resolve_credentials(REPO_DIR)
@@ -153,17 +125,8 @@ def main() -> int:
         return 1
     env_status = ensure_infoguana_env(token, base_url)
 
-    sizing: dict = {}
-    if not n:
-        sizing = _fetch_sizing(base_url, token)
-        if sizing:
-            n = int(sizing["recommended_chunks"])
-        else:
-            n = FALLBACK_CHUNKS
-            print(f"warning: could not reach {base_url}/onboard/sizing — "
-                  f"falling back to {n} chunks. Re-run once the server is up "
-                  f"so the count is derived from actual blob size.",
-                  file=sys.stderr)
+    n, sizing = resolve_chunks(base_url, token, override,
+                               lambda m: print(m, file=sys.stderr))
 
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     if not SETTINGS.exists():
@@ -234,7 +197,8 @@ def main() -> int:
             for p in over[:5]:
                 print(f"    {p['project']}: {p['bytes']} B, worst slice "
                       f"{p['widest_at_recommended']} B")
-            print("    Trim the pinned rule set for these projects — 64 hook")
+            print(f"    Trim the pinned rule set for these projects — "
+                  f"{MAX_CHUNKS} hook")
             print("    entries is the chunk route's ceiling.")
     elif override is None:
         print(f"note: count is the {FALLBACK_CHUNKS}-chunk fallback, not measured")

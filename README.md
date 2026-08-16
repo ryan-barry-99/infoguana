@@ -274,8 +274,18 @@ Then make Codex actually see it:
   *Remote-SSH: Kill VS Code Server on Host*.
 
 If your shell startup file skips non-interactive shells (Debian's
-default `~/.bashrc` starts with `[ -z "$PS1" ] && return`), put the
-block *above* that line, so IDE-launched processes get it too.
+default `~/.bashrc` starts with `[ -z "$PS1" ] && return`), an
+IDE-launched process may not reach the block at all. Prefer telling your
+editor directly — VS Code's `terminal.integrated.env.*`, a systemd user
+environment, or the desktop entry that launches it — rather than moving
+the block above that guard.
+
+Moving it above the guard does work, but it puts the token in the
+environment of *every* non-interactive shell on the machine: cron jobs,
+git hooks, `ssh host <cmd>`, and any build or install script you run.
+Each of those can read it from `/proc/<pid>/environ`, and tooling that
+dumps `env` for diagnostics will write it to a log. That is a much wider
+exposure than the mode-600 file it came from.
 
 Check it landed — in a new terminal, and expect a non-zero length:
 
@@ -301,7 +311,11 @@ looks like a networking bug.
    Use `host.containers.internal` under Podman. On Linux, Docker only
    provides `host.docker.internal` if you add
    `--add-host=host.docker.internal:host-gateway`; otherwise use the
-   host's LAN or tailnet IP.
+   host's tailnet IP in preference to a LAN one — infoguana speaks plain
+   HTTP, so on a LAN the bearer crosses the wire in cleartext and anyone
+   who can observe that segment gets full read/write on the corpus. Over
+   the container-to-host gateway or a tailnet, the traffic never reaches
+   an untrusted network.
 
 2. **The token, inside the container.** A shell startup file on the host
    is irrelevant to a process in a container. Pass it through — in
@@ -376,8 +390,19 @@ python scripts/init-project-infoguana.py <project-name> [target-dir]
 `<project-name>` is the key infoguana uses to scope notes (usually the
 repo's directory name — keep it consistent so notes stay grouped). If
 `[target-dir]` is omitted, the file lands in the current directory.
-After writing, edit the generated `CLAUDE.md` to fill in the one-line
-project description and `<AUTHOR>` placeholder, then commit.
+After writing, edit the generated file to fill in the one-line project
+description and `<AUTHOR>` placeholder, then commit.
+
+Each agent reads a different filename, so pass `--agent` to match yours:
+
+```bash
+python scripts/init-project-infoguana.py <project-name> --agent codex   # AGENTS.md
+python scripts/init-project-infoguana.py <project-name> --agent both    # and CLAUDE.md
+```
+
+The default is `claude` (`CLAUDE.md`). The body is identical either way —
+it only points at infoguana — so `both` is the right choice for a repo
+whose contributors don't all use the same agent.
 
 ### Option B — user-private (`infoguana-onboard` Claude Code skill)
 

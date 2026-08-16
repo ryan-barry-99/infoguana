@@ -45,7 +45,10 @@ def detect_agent() -> str:
     # Claude is checked first on purpose: CODEX_HOME is exported into the
     # whole IDE environment wherever the Codex extension is installed, so
     # it leaks into other agents' sessions and is not evidence that Codex
-    # is the host. CLAUDECODE is only ever set by Claude Code itself.
+    # is the host. CLAUDECODE is set by Claude Code and inherited by
+    # anything it spawns — so it leaks too, just narrowly (a Codex session
+    # started from a Claude Code shell reads as claude). Neither probe is
+    # authoritative; INFOGUANA_AGENT is the fix when it matters.
     if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_PROJECT_DIR"):
         return "claude"
     if os.environ.get("CODEX_HOME") or os.environ.get("CODEX_SANDBOX"):
@@ -54,6 +57,10 @@ def detect_agent() -> str:
 
 
 def memory_override() -> str:
+    """The memory-system directive for the detected host agent: the shared
+    text, plus the clause naming that agent's own built-in store to leave
+    alone. An unrecognized host gets the shared text only — naming a store
+    we are guessing at would be an instruction pointing somewhere real."""
     agent = detect_agent()
     if agent == "claude":
         return _OVERRIDE_HEAD + _OVERRIDE_CLAUDE

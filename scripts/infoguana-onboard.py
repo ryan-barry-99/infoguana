@@ -2,9 +2,21 @@
 """SessionStart hook: pulls infoguana's memory protocol + project context
 for the current cwd's project and emits it as additionalContext.
 
-Works with both Claude Code and Codex — Codex consumes the same
-`hookSpecificOutput` wire format, so one script serves either agent and
-the same corpus follows you between them.
+NOT REGISTERED BY EITHER INSTALLER, and it cannot carry a real corpus.
+A hook's inline `additionalContext` window is ~2KB; the protocol intro
+and pinned rules alone are budget-exempt and already exceed that, so this
+blob measures ~4.8KB at even a 300-token budget and grows from there. The
+overflow does not error — it is truncated, or spilled to a file the agent
+is merely handed a path to, so rules past the cut go missing from the
+session that needed them and nothing says so.
+
+Use infoguana-onboard-chunk.py, which both installers register: it splits
+the same blob across N hooks that each get their own inline window. This
+script is kept only for one-shot debugging of what build() produces.
+
+The wire format is agent-neutral (Codex consumes the same
+`hookSpecificOutput` shape), so the limitation above is the delivery
+window, not the agent.
 
 The project is taken from CLAUDE_PROJECT_DIR when set (Claude Code) and
 otherwise from the process cwd, which is the workspace root under Codex.
@@ -35,15 +47,12 @@ def main() -> int:
     _load_env_file(Path.home() / ".infoguana.env")
     url = (os.environ.get("INFOGUANA_URL") or "http://localhost:8789").rstrip("/")
     token = os.environ.get("INFOGUANA_TOKEN", "")
-    # 1500 was set when the corpus had few rules. Rules are pinned before
-    # any note is considered, so once a project accumulates a handful of
-    # them they consume the whole budget and the agent gets rules and zero
-    # memories — the failure looks like an empty corpus rather than a
-    # too-small budget. Chunked delivery (Claude Code) can afford more;
-    # this single-shot path is capped by what one hook may return, so 6000
-    # is a compromise. Raise INFOGUANA_ONBOARD_BUDGET if your host allows
-    # a larger payload.
-    budget = os.environ.get("INFOGUANA_ONBOARD_BUDGET", "6000")
+    # Raising this does not buy more delivered context — see the module
+    # docstring. The blob is already several times the inline window at
+    # any budget, so a larger number only moves the truncation point
+    # further into content nobody receives. Left where it was rather than
+    # tuned, because the fix for this path is the chunked hook.
+    budget = os.environ.get("INFOGUANA_ONBOARD_BUDGET", "1500")
     if not token:
         return 0
 

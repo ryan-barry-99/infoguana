@@ -35,9 +35,13 @@ entry below are recorded only in the commit history.
 - The installers no longer register a fixed 16 hooks; the count comes from
   `/onboard/sizing`, and `INFOGUANA_HOOK_CHUNKS` now validates a 1..64 range that
   previously accepted anything.
-- `scripts/infoguana-onboard.py` raised its default `INFOGUANA_ONBOARD_BUDGET` from
-  1500 to 6000. No installer registers this script; the chunked hook is the
-  supported path.
+- `scripts/init-project-infoguana.py` takes `--agent claude|codex|both`, writing
+  `CLAUDE.md`, `AGENTS.md`, or the pair. Codex reads a different filename, so
+  without this a Codex user had no way to wire up a project.
+- Chunk-count resolution moved into `scripts/_infoguana_setup.py`, shared by both
+  installers. `INFOGUANA_HOOK_CHUNKS` is validated before any credential or network
+  work, and its upper bound now tracks the route's own ceiling of 128 rather than a
+  hardcoded 64 that had gone stale.
 
 ### Fixed
 
@@ -47,6 +51,17 @@ entry below are recorded only in the commit history.
 - `INFOGUANA_HOOK_DISABLE=1` now suppresses the memory-override slice too, not only
   the context slices. The web UI's chat seeds its own context and sets this, so it
   was receiving roughly 1KB of override text on every turn.
+- A server without `/onboard/sizing` is reported as such instead of as unreachable.
+  The request falls through to `/onboard/{project}` and returns 200, so the old
+  message blamed the network on a server that was plainly answering.
+- `scripts/install-infoguana-mcp.py` writes `~/.claude.json` atomically. It holds
+  every project's Claude Code history and MCP config, and a truncating write left it
+  empty if interrupted.
+- Re-running an installer re-applies mode 600 to `~/.infoguana.env` even when the
+  contents need no change, so a file whose permissions drifted stops being reported
+  as fine while holding a readable bearer token.
+- An invalid `INFOGUANA_HOOK_CHUNKS` prints a one-line error from the Codex installer
+  instead of an uncaught traceback.
 
 ## v0.1.0 — 2026-08-16
 

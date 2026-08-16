@@ -48,18 +48,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _infoguana_setup import (  # noqa: E402
     ENV_FILE,
     atomic_write,
-    authed_request,
     ensure_infoguana_env,
+    parse_chunk_override,
     quote,
+    resolve_chunks,
     resolve_credentials,
 )
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 HOOK = REPO_DIR / "scripts" / "infoguana-onboard-chunk.py"
-# Registered when the server can't be measured. Generous on purpose:
-# a surplus hook is a no-op (the route returns "" and the hook emits
-# nothing), while a shortfall truncates every slice.
-FALLBACK_CHUNKS = 40
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
 CONFIG = CODEX_HOME / "config.toml"
 
@@ -78,34 +75,8 @@ END = "# <<< infoguana <<<"
 TOKEN_ENV_VAR = "INFOGUANA_TOKEN"
 
 
-def _resolve_chunks(base_url: str, token: str) -> int:
-    """How many slice hooks to register, measured by the server.
-
-    Mirrors the Claude Code installer: /onboard/sizing splits every
-    project's blob and reports the count at which no slice exceeds the
-    inline budget. INFOGUANA_HOOK_CHUNKS overrides (1..64, the chunk
-    route's accepted range).
-    """
-    override = os.environ.get("INFOGUANA_HOOK_CHUNKS")
-    if override is not None:
-        try:
-            n = int(override)
-        except ValueError:
-            raise RuntimeError("INFOGUANA_HOOK_CHUNKS must be an integer")
-        if not 1 <= n <= 64:
-            raise RuntimeError("INFOGUANA_HOOK_CHUNKS must be 1..64")
-        return n
-    req = authed_request(f"{base_url.rstrip('/')}/onboard/sizing", token)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return int(data["recommended_chunks"])
-    except (urllib.error.URLError, TimeoutError, OSError,
-            json.JSONDecodeError, KeyError, ValueError):
-        print(f"warning: could not reach {base_url}/onboard/sizing — "
-              f"registering {FALLBACK_CHUNKS} chunks. Re-run once the server "
-              f"is up so the count is measured.", file=sys.stderr)
-        return FALLBACK_CHUNKS
+def _warn(msg: str) -> None:
+    print(msg, file=sys.stderr)
 
 
 def render_block(base_url: str, chunks: int) -> str:
@@ -359,6 +330,14 @@ def main() -> int:
         print(f"error: hook script not found at {HOOK}", file=sys.stderr)
         return 1
 
+    # Validated before any credential or network work, so a typo fails
+    # immediately instead of after a server round-trip.
+    try:
+        override = parse_chunk_override(os.environ.get("INFOGUANA_HOOK_CHUNKS"))
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
     try:
         token, base_url = resolve_credentials(REPO_DIR)
     except RuntimeError as e:
@@ -378,7 +357,7 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    chunks = _resolve_chunks(base_url, token)
+    chunks, _sizing = resolve_chunks(base_url, token, override, _warn)
     block = render_block(base_url, chunks)
     if args.print_only:
         print(block, end="")

@@ -235,6 +235,16 @@ def ensure_infoguana_env(token: str, base_url: str) -> str:
 
     if ENV_FILE.exists() and all(existing.get(k) in (v, quoted[k])
                                  for k, v in desired.items()):
+        # Re-assert the mode even when the contents need no change. This
+        # is a dotfile in $HOME holding a bearer token: it gets restored
+        # from backups, copied out of a dotfiles repo, or recreated by
+        # hand under a permissive umask. Applying 600 only as part of a
+        # write meant a drifted file kept its mode while the installer
+        # reported it fine and the README promised 600.
+        try:
+            os.chmod(ENV_FILE, 0o600)
+        except OSError:
+            pass  # non-POSIX filesystem; contents are still correct
         return f"~/.infoguana.env already up-to-date ({ENV_FILE})"
 
     lines = preserved + [f"{k}={v}" for k, v in quoted.items()]
@@ -243,6 +253,96 @@ def ensure_infoguana_env(token: str, base_url: str) -> str:
     if not existing:
         return f"created ~/.infoguana.env at {ENV_FILE}"
     return f"refreshed ~/.infoguana.env at {ENV_FILE}"
+
+
+# ---------------------------------------------------------------------
+# chunk resolution
+# ---------------------------------------------------------------------
+
+# Registered when the server can't tell us the measured count. Deliberately
+# generous: a surplus hook is a no-op (empty slice, nothing emitted), while a
+# shortfall drops rules out of the session silently.
+FALLBACK_CHUNKS = 40
+
+# The chunk route's own ceiling (`of` is rejected above this). Kept here so
+# both installers read one number — they previously hardcoded 64 each and
+# went stale when the route raised its bound.
+MAX_CHUNKS = 128
+
+
+class SizingUnavailable(Exception):
+    """The server could not report a measured chunk count.
+
+    Carries a message that says *which* failure it was, because the two
+    have opposite remedies: an unreachable server is worth retrying, an
+    endpoint the server doesn't implement never will be.
+    """
+
+
+def parse_chunk_override(raw: str | None) -> int | None:
+    """Validate INFOGUANA_HOOK_CHUNKS. None when unset.
+
+    Raises ValueError whose message is ready to print. Deliberately does
+    no I/O so both installers can check it before touching credentials or
+    the network — the cheapest failure should come first, and a guard
+    reachable without a fixture is one that gets tested.
+    """
+    if raw is None:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        raise ValueError("INFOGUANA_HOOK_CHUNKS must be an integer")
+    if not 1 <= n <= MAX_CHUNKS:
+        raise ValueError(f"INFOGUANA_HOOK_CHUNKS must be 1..{MAX_CHUNKS} "
+                         f"(the chunk route's accepted range)")
+    return n
+
+
+def fetch_sizing(base_url: str, token: str) -> dict:
+    """Ask /onboard/sizing how many chunks the largest blob needs.
+
+    Raises SizingUnavailable rather than returning a sentinel, so the
+    caller reports the actual cause. The non-JSON case is its own branch
+    for a specific reason: `/onboard/sizing` matches the older
+    `/onboard/{project}` route, so a server predating this endpoint
+    answers **200 with a plain-text onboard blob for a phantom project
+    named "sizing"** rather than 404. Reported as a transport failure it
+    reads as "the server is down" while the server is plainly answering,
+    and re-running never clears it.
+    """
+    url = f"{base_url.rstrip('/')}/onboard/sizing"
+    try:
+        with urllib.request.urlopen(authed_request(url, token), timeout=30) as resp:
+            body = resp.read().decode("utf-8")
+    except Exception as e:
+        raise SizingUnavailable(f"could not reach {url} ({e})")
+
+    try:
+        data = json.loads(body)
+        return {**data, "recommended_chunks": int(data["recommended_chunks"])}
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        raise SizingUnavailable(
+            f"{url} did not return sizing data — this server predates the "
+            f"endpoint (the request fell through to /onboard/<project>)")
+
+
+def resolve_chunks(base_url: str, token: str, override: int | None,
+                   warn) -> tuple[int, dict]:
+    """The chunk count to register, plus the sizing report behind it.
+
+    `override` comes from parse_chunk_override. `warn` is called with a
+    single message string when the count had to be guessed; the report is
+    empty in that case.
+    """
+    if override is not None:
+        return override, {}
+    try:
+        sizing = fetch_sizing(base_url, token)
+    except SizingUnavailable as e:
+        warn(f"warning: {e}; registering {FALLBACK_CHUNKS} chunks.")
+        return FALLBACK_CHUNKS, {}
+    return sizing["recommended_chunks"], sizing
 
 
 def quote(s: str) -> str:

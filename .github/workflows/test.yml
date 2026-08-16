@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A force-push supersedes whatever was already running for that ref.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel 3.12 because 3.11 failed — a version-specific break is
+      # exactly what the matrix exists to surface, and killing the other leg
+      # hides whether it is one.
+      fail-fast: false
+      matrix:
+        # Floor and current. requires-python is >=3.11, so 3.11 is a claim
+        # the project makes and nothing else verifies.
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      # No .env and no data/ here, which is deliberate: the suite is written
+      # to run against a bare checkout, and this is the only environment that
+      # actually holds it to that.
+      - name: Run tests
+        run: pytest -q

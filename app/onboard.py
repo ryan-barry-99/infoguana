@@ -1,6 +1,8 @@
 """SessionStart context builder. The /onboard/<project> endpoint and the
 infoguana-onboard hook script both call build() to produce a single text blob
-that gets injected into a fresh Claude Code session."""
+that gets injected into a fresh agent session. The blob is agent-neutral —
+Claude Code and Codex both consume it — so nothing here should name a
+specific agent or its private file layout."""
 import threading
 import time
 
@@ -19,7 +21,8 @@ _build_lock = threading.Lock()
 
 
 DEFAULT_PROTOCOL = """\
-You are a Claude Code agent connected to the user's shared cross-project \
+You are a coding agent (Claude Code, Codex, or similar) connected to the \
+user's shared cross-project \
 **infoguana** via the `infoguana` MCP server. Infoguana is the user's authoritative \
 memory across every project they work on. Use it.
 

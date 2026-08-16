@@ -136,10 +136,14 @@ def test_per_hook_keys_stay_with_their_own_hook(ic):
 
 
 def test_unowned_keys_in_our_mcp_table_survive(ic):
+    # Anchor on the module's own constant rather than the literal name.
+    # Spelling it out here meant renaming the variable turned this
+    # .replace() into a silent no-op, so the test injected nothing and
+    # then reported the absence as a merge bug.
+    anchor = f'bearer_token_env_var = "{ic.TOKEN_ENV_VAR}"'
     old = ic.render_block("http://localhost:8789", 1).replace(
-        'bearer_token_env_var = "INFOGUANA_MCP_SECRET"',
-        'bearer_token_env_var = "INFOGUANA_MCP_SECRET"\n'
-        'default_tools_approval_mode = "never"')
+        anchor, anchor + '\ndefault_tools_approval_mode = "never"')
+    assert "default_tools_approval_mode" in old, "anchor did not match render_block"
     merged = ic._merge(old, ic.render_block("http://localhost:8789", 1))
     parsed = _parse(merged, ic)
     assert parsed["mcp_servers"]["infoguana"]["default_tools_approval_mode"] == "never"

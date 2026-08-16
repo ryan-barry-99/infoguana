@@ -241,7 +241,7 @@ Two steps remain that the installer can't do for you.
 
 For an HTTP MCP server, Codex does not read the token from
 `config.toml` — it reads the environment variable named there
-(`INFOGUANA_MCP_SECRET`) from its own process, once, at startup. That's
+(`INFOGUANA_TOKEN`) from its own process, once, at startup. That's
 a feature: your secret stays in `~/.infoguana.env` (mode 600) instead of
 sitting in a config file. But it means the variable has to be set in
 whatever launches Codex.
@@ -251,9 +251,16 @@ Add this to your shell startup file (`~/.bashrc`, `~/.zshrc`):
 ```bash
 if [ -f "$HOME/.infoguana.env" ]; then
     . "$HOME/.infoguana.env"
-    export INFOGUANA_MCP_SECRET="$INFOGUANA_TOKEN"
+    export INFOGUANA_TOKEN
 fi
 ```
+
+Note this is deliberately *not* `INFOGUANA_MCP_SECRET`, which is the
+server's own variable. If you run the server with Docker Compose on this
+same machine, exporting that name from your shell would feed the old
+token back to `docker compose up` — so deleting `data/.mcp_secret` to
+rotate the secret would silently leave the server accepting the token you
+meant to revoke.
 
 Then make Codex actually see it:
 
@@ -273,7 +280,7 @@ block *above* that line, so IDE-launched processes get it too.
 Check it landed — in a new terminal, and expect a non-zero length:
 
 ```bash
-echo ${#INFOGUANA_MCP_SECRET}
+echo ${#INFOGUANA_TOKEN}
 ```
 
 #### If the agent runs in a container
@@ -301,10 +308,10 @@ looks like a networking bug.
    `devcontainer.json`:
 
    ```jsonc
-   "containerEnv": { "INFOGUANA_MCP_SECRET": "${localEnv:INFOGUANA_MCP_SECRET}" }
+   "containerEnv": { "INFOGUANA_TOKEN": "${localEnv:INFOGUANA_TOKEN}" }
    ```
 
-   or `docker run -e INFOGUANA_MCP_SECRET`. The same applies to the
+   or `docker run -e INFOGUANA_TOKEN`. The same applies to the
    `SessionStart` hook: its interpreter and script path must exist
    *inside* the container, so mount the repo (or skip the hook there and
    rely on MCP alone).

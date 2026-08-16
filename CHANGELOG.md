@@ -17,12 +17,36 @@ entry below are recorded only in the commit history.
 - `scripts/_infoguana_setup.py`, shared installer helpers with atomic writes and
   `.env` parsing, so a failed install cannot leave a half-written config or a stray
   temp file behind.
+- `GET /onboard/sizing` reports each project's blob size and the chunk count needed
+  to deliver the largest without a slice exceeding the inline cap. Both installers
+  call it, so the hook count is measured rather than guessed.
 
 ### Changed
 
 - The SessionStart hook serves either agent unmodified, adapting only the text that
   names which built-in memory store to leave alone. Set `INFOGUANA_AGENT=claude|codex`
   when autodetection guesses wrong.
+- The onboard protocol no longer opens by telling the agent it is Claude Code. Note
+  that the protocol row is seeded once and then owned by the user, so existing
+  installs keep the old wording until edited in the web UI.
+- Chunk boundaries are chosen to avoid splitting a heading from its body or breaking
+  a rule mid-sentence, instead of snapping to evenly-spaced line starts. The slice
+  ceiling rose from 64 to 128.
+- The installers no longer register a fixed 16 hooks; the count comes from
+  `/onboard/sizing`, and `INFOGUANA_HOOK_CHUNKS` now validates a 1..64 range that
+  previously accepted anything.
+- `scripts/infoguana-onboard.py` raised its default `INFOGUANA_ONBOARD_BUDGET` from
+  1500 to 6000. No installer registers this script; the chunked hook is the
+  supported path.
+
+### Fixed
+
+- A failed context slice is now visible in the session instead of silently absent.
+  The hook injects a short notice naming the failure, so a partial load stops looking
+  identical to a complete one.
+- `INFOGUANA_HOOK_DISABLE=1` now suppresses the memory-override slice too, not only
+  the context slices. The web UI's chat seeds its own context and sets this, so it
+  was receiving roughly 1KB of override text on every turn.
 
 ## v0.1.0 — 2026-08-16
 

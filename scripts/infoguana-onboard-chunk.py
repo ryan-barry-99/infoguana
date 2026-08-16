@@ -63,6 +63,17 @@ def main() -> int:
     # directive telling it to prefer infoguana over its own file-based
     # memory. The store it was told to avoid is the one its harness
     # actively points it at.
+    # Opt-out for callers that already seed context themselves (e.g. the
+    # infoguana web-UI chat, which prepends a project-scoped seed before
+    # spawning `claude -p`). Without this, the hook fires from the
+    # service's cwd and injects `infoguana` memories on every chat.
+    #
+    # Checked ahead of --override, not just ahead of the slice path: the
+    # override text is context too, and a caller that asked for silence
+    # should not receive it on every turn.
+    if os.environ.get("INFOGUANA_HOOK_DISABLE") == "1":
+        return 0
+
     if len(sys.argv) >= 2 and sys.argv[1] == "--override":
         # Load the env file before detecting the agent, not after. The
         # documented escape hatch is INFOGUANA_AGENT in ~/.infoguana.env
@@ -78,13 +89,6 @@ def main() -> int:
         index = int(sys.argv[1])
         total = int(sys.argv[2])
     except ValueError:
-        return 0
-
-    # Opt-out for callers that already seed context themselves (e.g. the
-    # infoguana web-UI chat, which prepends a project-scoped seed before
-    # spawning `claude -p`). Without this, the hook fires from the
-    # service's cwd and injects `infoguana` memories on every chat.
-    if os.environ.get("INFOGUANA_HOOK_DISABLE") == "1":
         return 0
 
     # Stagger by chunk index so the agent sees chunks in registration

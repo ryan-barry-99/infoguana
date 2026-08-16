@@ -68,7 +68,14 @@ END = "# <<< infoguana <<<"
 
 # Codex reads the bearer token from the environment at launch rather than
 # from its config file, so the secret never lands in config.toml.
-TOKEN_ENV_VAR = "INFOGUANA_MCP_SECRET"
+#
+# Deliberately NOT INFOGUANA_MCP_SECRET, which is the *server's* variable:
+# docker-compose interpolates it from the invoking shell and the entrypoint
+# treats a non-empty value as "the operator supplied the secret", skipping
+# generation. Exporting that name from a login shell — which is exactly what
+# the setup instructions below ask for — would make `docker compose up` re-pin
+# the server to the old token after a rotation, silently and with no signal.
+TOKEN_ENV_VAR = "INFOGUANA_TOKEN"
 
 
 def _resolve_chunks(base_url: str, token: str) -> int:
@@ -409,7 +416,7 @@ def main() -> int:
     print()
     print('       if [ -f "$HOME/.infoguana.env" ]; then')
     print('           . "$HOME/.infoguana.env"')
-    print(f'           export {TOKEN_ENV_VAR}="$INFOGUANA_TOKEN"')
+    print(f"           export {TOKEN_ENV_VAR}")
     print("       fi")
     print()
     print("   Then open a new terminal (CLI), or fully restart your editor")

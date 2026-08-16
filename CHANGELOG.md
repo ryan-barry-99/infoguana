@@ -67,6 +67,10 @@ entry below are recorded only in the commit history.
   not the server's default. A custom `INFOGUANA_ONBOARD_BUDGET` changes how large the
   blob is, so sizing that ignored it registered too few chunks and truncated most of
   every slice.
+- A first install is no longer sized as if sessions receive nothing. `/onboard/sizing`
+  enumerated known projects only, so an empty corpus recommended one chunk while every
+  session still got ~12KB of global rules needing nine. Sizing now floors at the blob an
+  unknown project receives.
 - Re-installing from a different checkout no longer doubles the registration. Hook
   ownership was keyed to the installing checkout's absolute path, so a second copy
   of the repo saw the first one's entries as a stranger's hooks, kept them, and

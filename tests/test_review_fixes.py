@@ -220,3 +220,33 @@ def test_the_stamped_template_names_no_claude_only_paths(tmp_path):
     body = (tmp_path / "AGENTS.md").read_text()
     assert "CLAUDE.md" not in body
     assert "memory/" not in body
+
+
+# --- sizing must cover a project the corpus has never seen ---------------
+
+def test_sizing_floors_at_the_unknown_project_blob(route, monkeypatch):
+    """A fresh install has no projects, so enumerating them recommends 1
+    chunk — while every session still receives the globals, ~12 KB needing
+    9. Sizing was therefore most wrong at a first install, where every
+    session is an unknown project."""
+    monkeypatch.setattr(route.db, "list_project_names", lambda: [])
+    big = "".join("y" * 60 + "\n" for _ in range(200))   # ~12 KB, like the globals
+    monkeypatch.setattr(route.onboard, "build_cached",
+                        lambda project, budget_tokens: big)
+    out = route.onboard_sizing(budget_tokens=4000)
+    assert out["projects"] == []
+    assert out["baseline_needed"] > 1
+    assert out["recommended_chunks"] == out["baseline_needed"]
+
+
+def test_a_large_project_still_wins_over_the_baseline(route, monkeypatch):
+    """The baseline is a floor, not a ceiling — a project bigger than the
+    globals must still drive the recommendation up."""
+    small = "".join("y" * 60 + "\n" for _ in range(20))
+    big = "".join("y" * 60 + "\n" for _ in range(400))
+    monkeypatch.setattr(route.db, "list_project_names", lambda: ["big"])
+    monkeypatch.setattr(route.onboard, "build_cached",
+                        lambda project, budget_tokens:
+                        small if project == route._BASELINE_PROJECT else big)
+    out = route.onboard_sizing(budget_tokens=4000)
+    assert out["recommended_chunks"] > out["baseline_needed"]

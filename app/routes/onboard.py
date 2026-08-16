@@ -29,6 +29,13 @@ log = logging.getLogger(__name__)
 # unicode-multibyte characters in note content.
 CHUNK_TARGET_BYTES = 1700
 
+# Stand-in project for "a directory the corpus has never seen". Its blob is
+# the globals-only floor every session is guaranteed to receive, so sizing
+# measures it alongside the real projects. Deliberately a name no real
+# project can collide with — a collision would silently size against
+# someone's actual notes instead of the floor.
+_BASELINE_PROJECT = "\x00baseline-unknown-project"
+
 # Upper bound on hook entries the chunk route will serve. Not a harness
 # limit — a sanity bound on how many subprocesses a session start should
 # spawn. Raised 64 -> 128 once the largest project needed 74 at
@@ -217,12 +224,23 @@ def onboard_sizing(budget_tokens: int = 4000) -> dict:
     installer prints any project whose `needed` exceeds what it can
     register, so an undersized split is visible at install time rather
     than inferred from garbled context weeks later.
+
+    The known projects are not the whole answer. A session opened in a
+    directory the corpus has never seen still receives the global rules
+    and the protocol — on an empty corpus that is ~12 KB needing 9
+    chunks, while enumerating projects alone recommends 1. Sizing from
+    the known projects only is therefore exactly wrong at the moment it
+    matters most: a first install, where every session is an unknown
+    project. The baseline below is that session's blob, and it floors the
+    recommendation without appearing as a project in the report.
     """
     blobs: dict[str, str] = {
         name: onboard.build_cached(project=name, budget_tokens=budget_tokens)
         for name in db.list_project_names()
     }
-    recommended = _chunks_fitting(list(blobs.values()))
+    baseline = onboard.build_cached(project=_BASELINE_PROJECT,
+                                    budget_tokens=budget_tokens)
+    recommended = _chunks_fitting([*blobs.values(), baseline])
     sizes = [
         {
             "project": name,
@@ -242,9 +260,13 @@ def onboard_sizing(budget_tokens: int = 4000) -> dict:
         "budget_tokens": budget_tokens,
         "max_bytes": max((s["bytes"] for s in sizes), default=0),
         "recommended_chunks": recommended,
+        # A project with no notes of its own still gets the globals, so
+        # the baseline is part of "does this fit", not a separate case.
+        "baseline_bytes": len(baseline.encode("utf-8")),
+        "baseline_needed": chunks_needed(baseline),
         "fits_all": all(
             s["widest_at_recommended"] <= CHUNK_TARGET_BYTES for s in sizes
-        ),
+        ) and _widest_slice(baseline, recommended) <= CHUNK_TARGET_BYTES,
         "projects": sizes,
     }
 

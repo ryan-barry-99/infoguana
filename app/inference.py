@@ -68,7 +68,12 @@ _VERB_PATTERNS: list[tuple[EdgeType, re.Pattern]] = [
 # Bare `#N` / `plan #N` references — default to `references`. Group 2 is the id.
 _BARE_RE = re.compile(
     r"(?:(?<=^)|(?<=[^\w/#]))"
-    r"(?:(plan|idea|memory|note|feedback|reference|project)\s+)?"
+    # Prose prefixes, not the `NoteType` enum — `note` and `project` are how
+    # people write, and both predate the type they resemble. Missing entries
+    # here degrade a reference to a *bare* proposal, which `infer_edges`
+    # discards unless `include_bare=True`, so the edge silently never forms.
+    r"(?:(plan|idea|memory|note|feedback|reference|project"
+    r"|feature|task|rule|skill)\s+)?"
     r"#(\d{1,6})\b",
     re.I,
 )

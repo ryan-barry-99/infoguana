@@ -63,14 +63,19 @@ def test_module_imports_without_deployment_env(module: str) -> None:
 # in the UI and silently dropped by the type filters. These check the
 # copies against the enum instead of checking the enum against itself.
 #
-# Two copies are importable constants. The browse filter's is not — it is
+# Four copies are importable constants. The browse filter's is not — it is
 # an inline list inside a dict literal in a request handler — so it is
-# read out of the source with `ast`. The colour map in
-# `app/templates/graph.html` is NOT covered here: extracting it means
-# parsing a JavaScript object literal out of a Jinja template, which is
-# more fragility than the check is worth. A type added without a colour
-# there degrades to a default colour rather than breaking, which is why
-# it is the one copy left unguarded.
+# read out of the source with `ast`. Two copies are NOT covered here, both
+# because extracting them means parsing a literal out of a template: the
+# colour map in `app/templates/graph.html`, and the type dropdown in
+# `app/templates/_note_card.html`. That is more fragility than the checks
+# are worth, but the two degrade differently and it is worth knowing which
+# is which. A missing colour falls back to a default and nothing breaks. A
+# missing dropdown option is worse: the select has no matching entry, so
+# the browser posts the empty "auto (reclassify)" value and saving the note
+# resets it to `unsorted`. The `_MANUAL_TYPES` check below is the practical
+# guard on that one, since the dropdown and that constant are edited
+# together or the edit route rejects the type outright.
 
 
 def _browse_filter_type_lists() -> list[list[str]]:
@@ -117,30 +122,54 @@ def test_browse_filter_offers_every_note_type(types: list[str]) -> None:
     assert set(types) == set(get_args(NoteType))
 
 
-@pytest.mark.parametrize("module_name,excluded", [
-    # `unsorted` is the classifier's default bucket, not something a caller
-    # should be able to filter or write by hand over MCP.
-    ("app.mcp_server", {"unsorted"}),
+@pytest.mark.parametrize("module_name,attr,excluded", [
+    # `unsorted` is the classifier's own default bucket, so no MCP caller
+    # should be able to write it by hand. Reads are a different question —
+    # see the READABLE_TYPES check below.
+    ("app.mcp_server", "VALID_TYPES", {"unsorted"}),
+    # The web edit form's manual-type whitelist: everything the type
+    # dropdown offers except the "auto (reclassify)" option, which posts an
+    # empty string rather than 'unsorted'.
+    ("app.routes.notes", "_MANUAL_TYPES", {"unsorted"}),
     # The classifier must never assign `rule` or `skill` — both are authored
     # deliberately — and never re-derive `unsorted`.
-    ("app.classify", {"rule", "skill", "unsorted"}),
+    ("app.classify", "VALID_TYPES", {"rule", "skill", "unsorted"}),
 ])
 def test_valid_types_are_declared_note_types(
-    module_name: str, excluded: set[str]
+    module_name: str, attr: str, excluded: set[str]
 ) -> None:
-    """Each `VALID_TYPES` must be exactly `NoteType` minus its exclusions.
+    """Each type whitelist must be exactly `NoteType` minus its exclusions.
 
     Equality against a declared exclusion set, not a subset assertion. A
     subset catches a stale literal — a member the enum no longer has — but
     it cannot catch the opposite and more damaging case: a type added to
-    `NoteType` and forgotten here. That direction fails silently, because
-    every read site spells the filter `type if type in VALID_TYPES else
-    None`, and a `None` filter means "no filter" rather than "no matches";
-    the caller gets unfiltered results it believes were narrowed. Naming
-    the exclusions keeps the deliberate narrowing intact while making the
-    next added type fail loudly, and point at the constant to update.
+    `NoteType` and forgotten here. That direction fails silently, in a
+    different way at each site: `mcp_server` rejects the write, so a note
+    typed by hand never gets the type it asked for; `routes.notes` 400s the
+    edit form, leaving the type unselectable in the card so the form posts
+    "auto" and the save resets the note to 'unsorted'; `classify` logs and
+    falls back to 'idea'. Naming the exclusions keeps the deliberate
+    narrowing intact while making the next added type fail loudly, and
+    point at the constant to update.
     """
     import importlib
 
-    valid = importlib.import_module(module_name).VALID_TYPES
+    valid = getattr(importlib.import_module(module_name), attr)
     assert set(valid) == set(get_args(NoteType)) - excluded
+
+
+def test_readable_types_covers_every_declared_note_type() -> None:
+    """`READABLE_TYPES` is the read-filter set and must span the whole enum.
+
+    Separate from the write gate on purpose: `unsorted` is a real state a
+    caller may want to list but must not assign by hand, so the read set is
+    a strict superset. Collapsing the two is what let `search(type='skill')`
+    return unfiltered results while `skill` was missing from the write gate
+    — an unrecognized filter used to coerce to `None`, and a `None` filter
+    means "no filter" rather than "no matches", so the caller got a full
+    result set it believed was narrowed. Both read sites now error instead,
+    which only stays correct while this set spans the enum.
+    """
+    from app.mcp_server import READABLE_TYPES
+
+    assert set(READABLE_TYPES) == set(get_args(NoteType))

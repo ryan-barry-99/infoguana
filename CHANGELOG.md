@@ -19,15 +19,16 @@ entry below are recorded only in the commit history.
 
 ### Changed
 
-- An unrecognized note type is now an error rather than a silent fallback.
-  `search`, `context`, `add` and `update` return an error naming the valid
-  set. Previously each spelled its check as `type if type in VALID_TYPES else
-  None`: on a read that meant "no filter" rather than "no matches", so the
-  caller received a full unfiltered payload it had every reason to believe was
-  narrowed, and on a write it handed the note to the classifier, which cannot
-  produce `rule` or `skill` at all. **This is a behavior change for existing
-  callers** — a stale or misspelled type that used to return plausible-looking
-  results now fails.
+- **Breaking for callers passing a bad type.** An unrecognized note type is now
+  an error from `search`, `context`, `add` and `update`, naming the valid set.
+  A stale or misspelled type that used to return plausible-looking results now
+  fails instead.
+- Reads no longer widen when the filter is unrecognized. An unknown type used
+  to coerce to "no filter" rather than "no matches", so the caller received a
+  full unfiltered payload it had every reason to believe was narrowed.
+- Writes no longer fall through to the classifier on an unrecognized type. It
+  cannot produce `rule` or `skill` at all, so a typo landed the note under a
+  type nobody asked for and no later session could tell.
 - `provenance_note` is clamped to 200 characters in preview-mode hits from
   `search` and `similar`. It was the one serialized field with no length
   discipline, and on the largest notes it cost several times what a preview

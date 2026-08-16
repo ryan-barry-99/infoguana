@@ -332,9 +332,7 @@ def onboard_chunk(project: str, index: int, of: int = 16,
         # *causes* content to go missing: chunk 0 is frequently under the
         # cap on its own but not by the notice's length, and its tail is
         # where DEFAULT_PROTOCOL lives. Carry it on whichever slice has the
-        # most headroom, and only when that headroom is real — an
-        # undersized split is already logged, so a notice that cannot fit
-        # anywhere is dropped rather than allowed to evict content.
+        # most headroom.
         carrier = min(range(of), key=lambda i: sizes[i])
         if index == carrier:
             notice = (
@@ -342,7 +340,18 @@ def onboard_chunk(project: str, index: int, of: int = 16,
                 "brief. Call `context(project=...)` for the full set before "
                 "relying on rules or plans._\n\n"
             )
-            if sizes[carrier] + len(notice.encode("utf-8")) <= CHUNK_TARGET_BYTES:
+            # Two regimes, and the eviction argument only covers one. When
+            # the carrier is under the cap, prepending the notice can push
+            # it over and evict real content, so it has to fit. When the
+            # carrier is *already* over the cap the harness is truncating
+            # its tail regardless — the notice costs 144 B of a tail that
+            # is being cut anyway and buys the agent the one thing it can
+            # act on. Dropping it there is backwards: a badly undersized
+            # split is exactly the case that loses the most, and it was
+            # the case that warned least.
+            if (sizes[carrier] > CHUNK_TARGET_BYTES
+                    or sizes[carrier] + len(notice.encode("utf-8"))
+                    <= CHUNK_TARGET_BYTES):
                 body = notice + body
     if not body:
         return ""

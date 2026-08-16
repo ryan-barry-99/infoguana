@@ -79,8 +79,9 @@ entry below are recorded only in the commit history.
   another checkout, and refuse outright when there is no TTY. Pass `--force` to
   replace it anyway.
 - The undersized-delivery notice no longer evicts the content it warns about. It rides
-  whichever slice has room rather than always the first, and is dropped when no slice
-  can carry it — the server log still records the shortfall.
+  whichever slice has the most room rather than always the first, and is skipped only
+  when adding it would push an otherwise-fitting slice over the cap. A slice already
+  over the cap still carries it, since that is the case losing the most content.
 
 ## v0.1.0 — 2026-08-16
 

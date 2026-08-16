@@ -105,6 +105,15 @@ def test_quoted_paths_survive_the_shell_verbatim(setup, path):
 
 # --- the undersized-delivery notice must pay for its own bytes -----------
 
+# Kept in step with the notice in app/routes/onboard.py. Only the length
+# matters here: the tests need to subtract it to reason about what a
+# slice weighed before the notice rode along.
+_NOTICE_BYTES = len(
+    ("_Some of this project's memory may be missing from this brief. Call "
+     "`context(project=...)` for the full set before relying on rules or "
+     "plans._\n\n").encode("utf-8"))
+
+
 @pytest.fixture
 def route(monkeypatch):
     """The chunk route with its one DB call stubbed out.
@@ -143,9 +152,31 @@ def test_the_notice_never_pushes_its_slice_over_the_cap(route, monkeypatch):
         assert len(carriers) <= 1, f"notice duplicated across slices at of={of}"
         for i, s in enumerate(served):
             if "may be missing" in s:
-                assert len(s.encode("utf-8")) <= cap, (
-                    f"notice pushed slice {i} to {len(s.encode())} B "
+                # The invariant is that the notice never turns a fitting
+                # slice into a non-fitting one — not that a carrier is
+                # always under the cap. A slice that was already over is
+                # allowed to carry it (see the test below), because its
+                # tail is being truncated either way.
+                without = len(s.encode("utf-8")) - _NOTICE_BYTES
+                assert len(s.encode("utf-8")) <= cap or without > cap, (
+                    f"notice pushed fitting slice {i} to {len(s.encode())} B "
                     f"against a {cap} B cap at of={of}")
+
+
+def test_a_slice_already_over_the_cap_still_carries_the_notice(route, monkeypatch):
+    """The severe-undersize case, which used to warn least while losing
+    most. The notice was attached only if the carrier plus the notice fit
+    under the cap; when every slice is over cap — the regime the module's
+    own history describes, and one a raised INFOGUANA_ONBOARD_BUDGET
+    reaches — the guard failed closed and the agent got no warning at all,
+    which is indistinguishable from a complete brief.
+    """
+    cap = route.CHUNK_TARGET_BYTES
+    blob = "".join("z" * (cap * 2) + "\n" for _ in range(10))
+    served = _serve(route, monkeypatch, blob, 5)
+    assert all(len(s.encode("utf-8")) > cap for s in served), (
+        "test blob is not in the every-slice-over-cap regime")
+    assert sum("may be missing" in s for s in served) == 1
 
 
 def test_the_notice_still_reaches_the_agent_when_it_fits(route, monkeypatch):
@@ -226,9 +257,9 @@ def test_the_stamped_template_names_no_claude_only_paths(tmp_path):
 
 def test_sizing_floors_at_the_unknown_project_blob(route, monkeypatch):
     """A fresh install has no projects, so enumerating them recommends 1
-    chunk — while every session still receives the globals, ~12 KB needing
-    9. Sizing was therefore most wrong at a first install, where every
-    session is an unknown project."""
+    chunk — while every session still receives the globals and the
+    seeded protocol, ~12 KB needing 9. Sizing was therefore most wrong at
+    a first install, where every session is an unknown project."""
     monkeypatch.setattr(route.db, "list_project_names", lambda: [])
     big = "".join("y" * 60 + "\n" for _ in range(200))   # ~12 KB, like the globals
     monkeypatch.setattr(route.onboard, "build_cached",

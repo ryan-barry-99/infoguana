@@ -12,9 +12,10 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import sys
 import tempfile
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from urllib.parse import quote_plus, urlparse, urlunparse
 
@@ -376,6 +377,80 @@ def resolve_chunks(base_url: str, token: str, override: int | None,
         warn(f"warning: {e}; registering {FALLBACK_CHUNKS} chunks.")
         return FALLBACK_CHUNKS, {}
     return sizing["recommended_chunks"], sizing
+
+
+# Every filename an infoguana SessionStart hook has ever been installed
+# under. Ownership is decided by these names, NOT by the absolute path of
+# the checkout currently running the installer: a second checkout — a
+# worktree, a clone, an extracted release tarball — used to look like a
+# stranger's hook to the installer that met it, so it was preserved as
+# foreign and the new entries were appended beside it. The registration
+# then held both, and every session start paid for both.
+HOOK_SCRIPT_NAMES = (
+    "infoguana-onboard-chunk.py",
+    "infoguana-onboard-chunk.sh",   # legacy bash variant
+    "infoguana-first-turn.sh",      # pre-chunking single-shot hook
+)
+
+
+def is_infoguana_hook(command: str) -> bool:
+    """True when `command` runs an infoguana hook from any checkout."""
+    return any(name in command for name in HOOK_SCRIPT_NAMES)
+
+
+def other_install_dirs(commands: Iterable[str], ours: Path) -> set[str]:
+    """Directories, other than ours, that already host a registered hook.
+
+    A non-empty result means the config points at an infoguana somewhere
+    else — a stale checkout, a relocated repo, or a throwaway one — and
+    replacing it is a decision the user has to make rather than a detail
+    the installer settles quietly.
+    """
+    found: set[str] = set()
+    for cmd in commands:
+        # Split the way the shell will. Scanning for the script name and
+        # walking back to the previous space instead loses everything
+        # before the space in a quoted path that contains one — which is
+        # exactly the case the quoting is there to handle.
+        try:
+            tokens = shlex.split(cmd)
+        except ValueError:          # unbalanced quotes in a hand-edit
+            tokens = cmd.split()
+        for tok in tokens:
+            if Path(tok).name in HOOK_SCRIPT_NAMES:
+                parent = str(Path(tok).parent)
+                if parent != str(ours):
+                    found.add(parent)
+    return found
+
+
+def confirm_replacement(target: Path, others: set[str], ours: Path,
+                        force: bool, prompt: Callable[[str], str] = input,
+                        out: Callable[[str], None] = print) -> bool:
+    """Ask before repointing an existing integration at this checkout.
+
+    Returns True to proceed. An install that finds no other checkout
+    registered never asks — the common upgrade-in-place case stays a
+    single command.
+
+    Refusing by default when there is no TTY is the load-bearing half:
+    installers get run from scripts, CI, and agent sessions, where a
+    y/N prompt nobody sees would otherwise read as consent.
+    """
+    if not others:
+        return True
+    out(f"warning: {target} already registers infoguana hooks from:")
+    for d in sorted(others):
+        out(f"    {d}")
+    out(f"    replacing them with: {ours}")
+    if force:
+        out("  --force given; replacing.")
+        return True
+    if not sys.stdin.isatty():
+        out("error: refusing to replace an existing integration "
+            "non-interactively. Re-run with --force if that is what you want.")
+        return False
+    return prompt("  replace them? [y/N] ").strip().lower() in ("y", "yes")
 
 
 def quote(s: str) -> str:

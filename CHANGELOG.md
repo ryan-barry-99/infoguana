@@ -67,6 +67,13 @@ entry below are recorded only in the commit history.
   not the server's default. A custom `INFOGUANA_ONBOARD_BUDGET` changes how large the
   blob is, so sizing that ignored it registered too few chunks and truncated most of
   every slice.
+- Re-installing from a different checkout no longer doubles the registration. Hook
+  ownership was keyed to the installing checkout's absolute path, so a second copy
+  of the repo saw the first one's entries as a stranger's hooks, kept them, and
+  appended its own beside them.
+- Both installers now confirm before repointing an integration registered from
+  another checkout, and refuse outright when there is no TTY. Pass `--force` to
+  replace it anyway.
 - The undersized-delivery notice no longer evicts the content it warns about. It rides
   whichever slice has room rather than always the first, and is dropped when no slice
   can carry it — the server log still records the shortfall.

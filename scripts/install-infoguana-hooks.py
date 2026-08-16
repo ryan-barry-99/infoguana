@@ -56,7 +56,10 @@ from _infoguana_setup import (  # noqa: E402
     FALLBACK_CHUNKS,
     MAX_CHUNKS,
     atomic_write,
+    confirm_replacement,
     ensure_infoguana_env,
+    is_infoguana_hook,
+    other_install_dirs,
     parse_chunk_override,
     quote,
     resolve_chunks,
@@ -65,8 +68,6 @@ from _infoguana_setup import (  # noqa: E402
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 HOOK = REPO_DIR / "scripts" / "infoguana-onboard-chunk.py"
-LEGACY_BASH_HOOK = REPO_DIR / "scripts" / "infoguana-onboard-chunk.sh"
-LEGACY_FIRST_TURN = REPO_DIR / "scripts" / "infoguana-first-turn.sh"
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
 
@@ -77,14 +78,20 @@ def _build_command(index: int, total: int) -> str:
     )
 
 
-def _strip_existing(entries: list[dict], match_substrings: list[str]) -> list[dict]:
-    """Drop any inner hook whose command contains any of the match
-    substrings. Preserve the entry wrapper if other hooks remain."""
+def _strip_existing(entries: list[dict]) -> list[dict]:
+    """Drop any inner hook that runs an infoguana hook script, from any
+    checkout. Preserve the entry wrapper if other hooks remain.
+
+    Matching by script name rather than by this checkout's absolute path
+    is what makes a re-install idempotent across a moved or duplicated
+    repo: path-matching left the old entries in place and appended a full
+    second set beside them.
+    """
     out: list[dict] = []
     for entry in entries:
         kept = [
             h for h in entry.get("hooks", [])
-            if not any(sub in (h.get("command") or "") for sub in match_substrings)
+            if not is_infoguana_hook(h.get("command") or "")
         ]
         if kept:
             new_entry = dict(entry)
@@ -93,7 +100,16 @@ def _strip_existing(entries: list[dict], match_substrings: list[str]) -> list[di
     return out
 
 
+def _registered_commands(hooks: dict) -> list[str]:
+    """Every hook command currently registered, across all events."""
+    return [h.get("command") or ""
+            for event in hooks.values() if isinstance(event, list)
+            for entry in event
+            for h in entry.get("hooks", [])]
+
+
 def main() -> int:
+    force = "--force" in sys.argv or "--yes" in sys.argv
     if not HOOK.is_file():
         print(f"error: hook script not found at {HOOK}", file=sys.stderr)
         return 1
@@ -136,16 +152,15 @@ def main() -> int:
     data = json.loads(raw)
     hooks = data.setdefault("hooks", {})
 
-    # Match by script path so any old entries (including the legacy bash
-    # variant) get cleaned up on upgrade.
-    match_substrings = [
-        str(HOOK),
-        str(LEGACY_BASH_HOOK),
-        str(LEGACY_FIRST_TURN),
-    ]
+    # An integration already pointing at a different checkout is replaced
+    # only with the user's say-so — it may be the one they actually use.
+    others = other_install_dirs(_registered_commands(hooks), HOOK.parent)
+    if not confirm_replacement(SETTINGS, others, HOOK.parent, force):
+        return 1
+
     for event in ("SessionStart", "UserPromptSubmit"):
         if event in hooks:
-            hooks[event] = _strip_existing(hooks[event], match_substrings)
+            hooks[event] = _strip_existing(hooks[event])
 
     ss = hooks.setdefault("SessionStart", [])
     for i in range(n):

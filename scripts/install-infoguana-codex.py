@@ -48,7 +48,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _infoguana_setup import (  # noqa: E402
     ENV_FILE,
     atomic_write,
+    confirm_replacement,
     ensure_infoguana_env,
+    is_infoguana_hook,
+    other_install_dirs,
     parse_chunk_override,
     quote,
     resolve_chunks,
@@ -181,9 +184,26 @@ def _hook_entries(segments: list[tuple[str, list[str]]]) -> list[list[int]]:
 
 
 def _is_ours(segments: list[tuple[str, list[str]]], entry: list[int]) -> bool:
-    """True when this hook entry runs our hook script."""
-    marker = str(HOOK)
-    return any(marker in _value(segments[i][1], "command") for i in entry)
+    """True when this hook entry runs an infoguana hook, from any checkout.
+
+    Keyed on the script name rather than this checkout's absolute path.
+    Path-keying made a second checkout's entries look like a stranger's
+    hook, so they were preserved as foreign and ours were appended
+    alongside — the registration kept both sets and every session start
+    ran both.
+    """
+    return any(is_infoguana_hook(_value(segments[i][1], "command"))
+               for i in entry)
+
+
+def _registered_commands(existing: str) -> list[str]:
+    """Every hook command in the managed block, for relocation detection."""
+    start = existing.find(BEGIN)
+    if start == -1:
+        return []
+    segments = _segments(existing[start:])
+    return [_value(lines, "command") for header, lines in segments
+            if header == "[[hooks.SessionStart.hooks]]"]
 
 
 def _segments(body: str) -> list[tuple[str, list[str]]]:
@@ -324,6 +344,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--print", dest="print_only", action="store_true",
                         help="print the managed block and exit")
+    parser.add_argument("--force", "--yes", dest="force", action="store_true",
+                        help="replace an integration registered from another "
+                             "checkout without confirming")
     args = parser.parse_args()
 
     if not HOOK.is_file():
@@ -367,6 +390,13 @@ def main() -> int:
 
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     existing = CONFIG.read_text() if CONFIG.exists() else ""
+
+    # An integration already pointing at a different checkout is replaced
+    # only with the user's say-so — it may be the one they actually use.
+    others = other_install_dirs(_registered_commands(existing), HOOK.parent)
+    if not confirm_replacement(CONFIG, others, HOOK.parent, args.force):
+        return 1
+
     updated = splice(existing, block)
 
     try:

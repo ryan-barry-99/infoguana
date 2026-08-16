@@ -6,6 +6,24 @@ Notable changes to infoguana. Format follows
 This file starts partway through the project's life; changes before the first
 entry below are recorded only in the commit history.
 
+## Unreleased
+
+### Added
+
+- Codex is a supported client alongside Claude Code. `scripts/install-infoguana-codex.py`
+  writes a managed block into `~/.codex/config.toml` registering the MCP server and the
+  SessionStart hooks, reusing the same `~/.infoguana.env` the Claude Code installer
+  creates. Everything outside the marker comments is preserved across re-runs.
+- `scripts/_infoguana_setup.py`, shared installer helpers with atomic writes and
+  `.env` parsing, so a failed install cannot leave a half-written config or a stray
+  temp file behind.
+
+### Changed
+
+- The SessionStart hook serves either agent unmodified, adapting only the text that
+  names which built-in memory store to leave alone. Set `INFOGUANA_AGENT=claude|codex`
+  when autodetection guesses wrong.
+
 ## v0.1.0 — 2026-08-16
 
 ### Added

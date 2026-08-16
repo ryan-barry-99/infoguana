@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
-"""SessionStart hook for Claude Code: pulls infoguana's memory
-protocol + project context for the current cwd's project, and emits the
-JSON shape Claude Code expects (additionalContext).
+"""SessionStart hook: pulls infoguana's memory protocol + project context
+for the current cwd's project and emits it as additionalContext.
+
+Works with both Claude Code and Codex — Codex consumes the same
+`hookSpecificOutput` wire format, so one script serves either agent and
+the same corpus follows you between them.
+
+The project is taken from CLAUDE_PROJECT_DIR when set (Claude Code) and
+otherwise from the process cwd, which is the workspace root under Codex.
+Note that stdin is deliberately left unread: both agents pipe a JSON
+payload to hooks, but blocking on an empty pipe would hang session start,
+and cwd already resolves correctly under both.
 
 Reads INFOGUANA_URL and INFOGUANA_TOKEN from ~/.infoguana.env (preferred)
 or the env. Fails open: if infoguana is unreachable, silently emits
@@ -16,54 +25,32 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-MEMORY_OVERRIDE = """
-# memory system override
-
-The user uses the `infoguana` MCP server as their authoritative persistent memory — NOT the built-in Claude Code auto-memory at `~/.claude/projects/<project>/memory/`.
-
-- Do NOT write to `~/.claude/projects/*/memory/*.md` or create/update `MEMORY.md` files there.
-- Save everything worth retaining (user facts, feedback, project context, references) via `add(content=..., project=<this>)`.
-- If you see an existing `~/.claude/projects/*/memory/` directory, treat it as legacy — do not extend it. Migrate substance to infoguana if still relevant.
-"""
-
-
-def _load_env_file(path: Path) -> None:
-    """Parse a simple shell-style .env file (KEY=VALUE, optional `export`,
-    surrounding quotes, # comments) into os.environ without overriding
-    existing vars. Cross-platform replacement for bash `source`."""
-    if not path.is_file():
-        return
-    for raw_line in path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].lstrip()
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
-        os.environ.setdefault(key, value)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _infoguana_agent import memory_override  # noqa: E402
+from _infoguana_setup import authed_request  # noqa: E402
+from _infoguana_setup import load_env_file as _load_env_file  # noqa: E402
 
 
 def main() -> int:
     _load_env_file(Path.home() / ".infoguana.env")
     url = (os.environ.get("INFOGUANA_URL") or "http://localhost:8789").rstrip("/")
     token = os.environ.get("INFOGUANA_TOKEN", "")
-    budget = os.environ.get("INFOGUANA_ONBOARD_BUDGET", "1500")
+    # 1500 was set when the corpus had few rules. Rules are pinned before
+    # any note is considered, so once a project accumulates a handful of
+    # them they consume the whole budget and the agent gets rules and zero
+    # memories — the failure looks like an empty corpus rather than a
+    # too-small budget. Chunked delivery (Claude Code) can afford more;
+    # this single-shot path is capped by what one hook may return, so 6000
+    # is a compromise. Raise INFOGUANA_ONBOARD_BUDGET if your host allows
+    # a larger payload.
+    budget = os.environ.get("INFOGUANA_ONBOARD_BUDGET", "6000")
     if not token:
         return 0
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     project = Path(project_dir).name
 
-    req = urllib.request.Request(
-        f"{url}/onboard/{project}?budget_tokens={budget}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    req = authed_request(f"{url}/onboard/{project}?budget_tokens={budget}", token)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             context = resp.read().decode("utf-8", errors="replace")
@@ -76,7 +63,7 @@ def main() -> int:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": context + MEMORY_OVERRIDE,
+            "additionalContext": context + memory_override(),
         }
     }))
     return 0

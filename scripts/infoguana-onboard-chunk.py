@@ -3,18 +3,24 @@
 onboard blob and emits it as additionalContext.
 
 Each hook's additionalContext is capped at ~2KB inline, but the cap is
-*per-hook*. The installer registers N (default 16) entries of this script
-with different chunk indices; all N slices land inline at session start
-with no truncation, so the agent sees the full ~22KB blob without a
-Read-tool round-trip.
+*per-hook*. The installer registers N entries of this script with
+different chunk indices; all N slices land inline at session start with
+no truncation, so the agent sees the whole blob without a Read-tool
+round-trip. N is derived from measured blob size at install time — see
+routes/onboard.chunks_needed and _chunks_fitting.
 
 Args:
     sys.argv[1]: chunk index (0-based)
     sys.argv[2]: total chunks (matches the of= query param)
 
 Reads INFOGUANA_URL, INFOGUANA_TOKEN, INFOGUANA_ONBOARD_BUDGET from
-~/.infoguana.env (preferred) or the env. Fails open: any error path
-emits nothing rather than blocking the session.
+~/.infoguana.env (preferred) or the env.
+
+Never blocks the session: a missing token or unparseable argv is a
+no-op, and a failed fetch degrades to a one-line notice instead of
+silence. Silence was the original behavior and it was wrong — a dropped
+slice looked exactly like a complete load, so an unseen rule read as a
+rule that didn't apply.
 """
 from __future__ import annotations
 
@@ -26,30 +32,46 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _infoguana_agent import memory_override  # noqa: E402
+from _infoguana_setup import authed_request  # noqa: E402
+from _infoguana_setup import load_env_file as _load_env_file  # noqa: E402
 
-def _load_env_file(path: Path) -> None:
-    """Parse a simple shell-style .env file (KEY=VALUE, optional `export`,
-    surrounding quotes, # comments) into os.environ without overriding
-    existing vars. Cross-platform replacement for bash `source`."""
-    if not path.is_file():
-        return
-    for raw_line in path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].lstrip()
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
-        os.environ.setdefault(key, value)
+
+def _emit(text: str) -> int:
+    """Write one SessionStart additionalContext payload to stdout."""
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": text,
+        }
+    }))
+    return 0
 
 
 def main() -> int:
+    # The memory-system override rides its own hook rather than being
+    # appended to a slice. Appending it would add ~1.1KB to whichever
+    # slice carried it and push that one over the inline cap, and the
+    # sizing search would then have to model a client-side addition it
+    # cannot see. A dedicated entry costs one hook and keeps the override
+    # emitted exactly once regardless of assembly order.
+    #
+    # This is also how the chunked path gained the override at all: it
+    # previously existed only in the single-shot script, so Claude Code —
+    # which has used chunked delivery all along — never received the
+    # directive telling it to prefer infoguana over its own file-based
+    # memory. The store it was told to avoid is the one its harness
+    # actively points it at.
+    if len(sys.argv) >= 2 and sys.argv[1] == "--override":
+        # Load the env file before detecting the agent, not after. The
+        # documented escape hatch is INFOGUANA_AGENT in ~/.infoguana.env
+        # — the only file either installer writes — and returning here
+        # before reading it meant the knob did nothing on the one path
+        # whose whole output depends on it.
+        _load_env_file(Path.home() / ".infoguana.env")
+        return _emit(memory_override())
+
     if len(sys.argv) < 3:
         return 0
     try:
@@ -82,26 +104,42 @@ def main() -> int:
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     project = Path(project_dir).name
 
-    req = urllib.request.Request(
+    req = authed_request(
         f"{url}/onboard/{project}/chunk/{index}?of={total}&budget_tokens={budget}",
-        headers={"Authorization": f"Bearer {token}"},
+        token,
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             chunk = resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return 0
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # Emitting nothing here is what made a partial memory load
+        # indistinguishable from a complete one: the agent proceeds
+        # confidently on a brief with a hole in it, and the only symptom
+        # is a rule that never fired.
+        #
+        # The notice says what the agent can act on and nothing else. The
+        # slice index, the total, and the transport error belong on stderr
+        # — they go to the hook log for whoever maintains this, not into
+        # the agent's context. An agent told "chunk 8/46 failed" cannot do
+        # anything with 8 or 46; it can only re-fetch its memory, so that
+        # is all the notice asks for. Repeating it per failed slice is
+        # harmless: identical sentences read as one fact.
+        print(f"infoguana: chunk {index + 1}/{total} failed for project "
+              f"{project!r}: {type(e).__name__}: {e}", file=sys.stderr)
+        return _emit(
+            "_Part of this project's memory failed to load. Call "
+            "`context(project=...)` for the full set before relying on "
+            "rules or plans._\n"
+        )
 
+    # An empty body is legitimate: _line_aligned_chunks yields empty
+    # leading/trailing slices for short blobs, and the route returns ""
+    # for those. Distinguish "nothing to send" from "couldn't send" —
+    # warning on the former would fire on every small project.
     if not chunk:
         return 0
 
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": chunk,
-        }
-    }))
-    return 0
+    return _emit(chunk)
 
 
 if __name__ == "__main__":

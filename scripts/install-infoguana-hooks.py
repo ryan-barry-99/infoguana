@@ -1,23 +1,35 @@
 #!/usr/bin/env python3
 """Idempotent installer for infoguana's Claude Code SessionStart hooks.
 
+For Codex, run scripts/install-infoguana-codex.py instead — both agents
+talk to the same server and the same corpus, so installing both is a
+supported setup and lets you switch agents freely.
+
 Does two things:
 
-1. Auto-generates ~/.infoguana.env from the running container's
-   data/.mcp_secret (token) and data/mcp.json (URL). Idempotent — if
-   ~/.infoguana.env already exists, INFOGUANA_URL and INFOGUANA_TOKEN
-   are refreshed in place and other lines are preserved.
+1. Auto-generates ~/.infoguana.env with the server's URL + bearer token
+   (see _infoguana_setup.resolve_credentials for where those come from).
+   Idempotent — if ~/.infoguana.env already exists, INFOGUANA_URL and
+   INFOGUANA_TOKEN are refreshed in place and other lines are preserved.
 
-2. Registers N (default 16) entries of scripts/infoguana-onboard-chunk.py
-   in ~/.claude/settings.json — each pinned to a different chunk index
+2. Registers N entries of scripts/infoguana-onboard-chunk.py in
+   ~/.claude/settings.json — each pinned to a different chunk index
    of the project's onboard blob. Each hook's additionalContext is
    capped at ~2KB inline but the cap is *per-hook*, so all N chunks
    land inline at session start with no truncation.
 
+N is measured, not hardcoded: the installer asks /onboard/sizing for
+the largest project's blob and registers enough chunks to keep every
+slice under the inline cap. Hardcoding is what broke it before — 16 was
+right for a ~22KB blob and silently wrong once the largest reached
+~59KB, at which point each slice ran ~2x over cap and lost its tail
+mid-rule. Set INFOGUANA_HOOK_CHUNKS to override (1..64); the installer
+prints any project that still won't fit.
+
 Re-running is a no-op for unchanged state: existing entries for this
 hook script are stripped (matched by script path) and re-registered
-with the requested count. Changing INFOGUANA_HOOK_CHUNKS removes the
-old entries and registers the new count.
+with the resolved count. A changed count removes the old entries and
+registers the new ones, so re-run this after the corpus grows.
 
 The hook command is registered as `{sys.executable} {abs_hook_path} i N`
 — absolute paths to both the Python interpreter and the hook script, so
@@ -35,32 +47,56 @@ from __future__ import annotations
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _infoguana_setup import (  # noqa: E402
+    atomic_write,
+    authed_request,
+    ensure_infoguana_env,
+    quote,
+    resolve_credentials,
+)
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 HOOK = REPO_DIR / "scripts" / "infoguana-onboard-chunk.py"
 LEGACY_BASH_HOOK = REPO_DIR / "scripts" / "infoguana-onboard-chunk.sh"
 LEGACY_FIRST_TURN = REPO_DIR / "scripts" / "infoguana-first-turn.sh"
 SETTINGS = Path.home() / ".claude" / "settings.json"
-MCP_SECRET_FILE = REPO_DIR / "data" / ".mcp_secret"
-MCP_JSON_FILE = REPO_DIR / "data" / "mcp.json"
-ENV_FILE = Path.home() / ".infoguana.env"
 
 
-def _quote(s: str) -> str:
-    """Quote a path/arg for inclusion in a shell command string. Handles
-    both POSIX sh and Windows cmd.exe — both treat double-quoted strings
-    as a single argument."""
-    if any(c in s for c in (" ", "\t", '"', "'", "(", ")", "&", "|", ";")):
-        return '"' + s.replace('"', r"\"") + '"'
-    return s
+# Used only when the server can't be reached to measure. Deliberately
+# generous: over-provisioning costs one no-op hook per surplus chunk
+# (the route returns "" and the hook emits nothing), while under-
+# provisioning silently truncates every slice.
+FALLBACK_CHUNKS = 40
 
 
 def _build_command(index: int, total: int) -> str:
     return (
-        f"{_quote(sys.executable)} {_quote(str(HOOK))} {index} {total}"
+        f"{quote(sys.executable)} {quote(str(HOOK))} {index} {total}"
     )
+
+
+def _fetch_sizing(base_url: str, token: str) -> dict:
+    """Ask the server how many chunks the largest project's blob needs.
+
+    Returns {} if the server is unreachable — the caller falls back to
+    FALLBACK_CHUNKS and says so. Deriving the count beats hardcoding it
+    because the blob only ever grows: the previous fixed 16 was set when
+    a blob ran ~22KB, and by the time the largest was ~59KB every slice
+    was ~2x over the inline cap with nothing reporting it.
+    """
+    url = f"{base_url.rstrip('/')}/onboard/sizing"
+    req = authed_request(url, token)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError,
+            json.JSONDecodeError, KeyError):
+        return {}
 
 
 def _strip_existing(entries: list[dict], match_substrings: list[str]) -> list[dict]:
@@ -79,74 +115,30 @@ def _strip_existing(entries: list[dict], match_substrings: list[str]) -> list[di
     return out
 
 
-def _base_url_from_mcp_json() -> str:
-    """Pull the http URL from data/mcp.json and strip the /mcp/ path
-    suffix to get the server's base URL (used for /onboard/* requests).
-    Honors INFOGUANA_PUBLIC_HOST overrides the user passed at container
-    start time, since the entrypoint baked them into mcp.json."""
-    mcp = json.loads(MCP_JSON_FILE.read_text())
-    full_url = mcp["mcpServers"]["infoguana"]["url"]  # e.g. http://host:8789/mcp/
-    parsed = urlparse(full_url)
-    # Strip path entirely — onboard endpoints live at /onboard, not /mcp/onboard.
-    return urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
-
-
-def _ensure_infoguana_env(token: str, base_url: str) -> str:
-    """Create or update ~/.infoguana.env so the SessionStart hooks can
-    reach the server. Preserves any other lines the user added (other
-    env vars, comments). Returns a short status string for the log."""
-    desired = {"INFOGUANA_URL": base_url, "INFOGUANA_TOKEN": token}
-    preserved: list[str] = []
-    existing: dict[str, str] = {}
-
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text().splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                preserved.append(line)
-                continue
-            key, _, value = stripped.partition("=")
-            key = key.strip()
-            if key in desired:
-                existing[key] = value.strip()
-                continue
-            preserved.append(line)
-
-    if all(existing.get(k) == v for k, v in desired.items()) and ENV_FILE.exists():
-        return f"~/.infoguana.env already up-to-date ({ENV_FILE})"
-
-    lines = preserved + [f"{k}={v}" for k, v in desired.items()]
-    ENV_FILE.write_text("\n".join(lines).rstrip() + "\n")
-    try:
-        ENV_FILE.chmod(0o600)  # POSIX only; no-op on Windows
-    except OSError:
-        pass
-
-    if not existing:
-        return f"created ~/.infoguana.env at {ENV_FILE}"
-    return f"refreshed ~/.infoguana.env at {ENV_FILE}"
-
-
 def main() -> int:
     if not HOOK.is_file():
         print(f"error: hook script not found at {HOOK}", file=sys.stderr)
         return 1
-    if not MCP_SECRET_FILE.is_file() or not MCP_JSON_FILE.is_file():
-        print(f"error: {MCP_SECRET_FILE.name} and/or {MCP_JSON_FILE.name} not found in {REPO_DIR / 'data'}.",
-              file=sys.stderr)
-        print("hint:  is the container running? (docker compose up -d --build)",
-              file=sys.stderr)
-        return 1
+
+    override = os.environ.get("INFOGUANA_HOOK_CHUNKS")
+    if override is not None:
+        try:
+            n = int(override)
+        except ValueError:
+            print("error: INFOGUANA_HOOK_CHUNKS must be an integer", file=sys.stderr)
+            return 1
+        if n < 1 or n > 64:
+            print("error: INFOGUANA_HOOK_CHUNKS must be 1..64 (the chunk "
+                  "route's accepted range)", file=sys.stderr)
+            return 1
+    else:
+        n = 0  # resolved from /onboard/sizing once credentials are known
 
     try:
-        n = int(os.environ.get("INFOGUANA_HOOK_CHUNKS", "16"))
-    except ValueError:
-        print("error: INFOGUANA_HOOK_CHUNKS must be an integer", file=sys.stderr)
+        token, base_url = resolve_credentials(REPO_DIR)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
-
-    try:
-        token = MCP_SECRET_FILE.read_text().strip()
-        base_url = _base_url_from_mcp_json()
     except PermissionError as e:
         # Old containers (pre-PUID/PGID entrypoint) wrote secret files as
         # root with chmod 600. The current entrypoint chowns to the host
@@ -159,7 +151,19 @@ def main() -> int:
         print(f"           sudo chown -R $USER:$USER {REPO_DIR / 'data'}",
               file=sys.stderr)
         return 1
-    env_status = _ensure_infoguana_env(token, base_url)
+    env_status = ensure_infoguana_env(token, base_url)
+
+    sizing: dict = {}
+    if not n:
+        sizing = _fetch_sizing(base_url, token)
+        if sizing:
+            n = int(sizing["recommended_chunks"])
+        else:
+            n = FALLBACK_CHUNKS
+            print(f"warning: could not reach {base_url}/onboard/sizing — "
+                  f"falling back to {n} chunks. Re-run once the server is up "
+                  f"so the count is derived from actual blob size.",
+                  file=sys.stderr)
 
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     if not SETTINGS.exists():
@@ -188,11 +192,52 @@ def main() -> int:
                 "command": _build_command(i, n),
             }]
         })
+    # One more entry for the memory-system override. It gets its own hook
+    # rather than being folded into a slice so it can't push that slice
+    # over the inline cap, and so the sizing search doesn't have to model
+    # a client-side addition it never sees. Matched by the same script
+    # path as the chunk hooks, so re-running still strips it cleanly.
+    ss.append({
+        "hooks": [{
+            "type": "command",
+            "command": f"{quote(sys.executable)} {quote(str(HOOK))} --override",
+        }]
+    })
 
-    SETTINGS.write_text(json.dumps(data, indent=2) + "\n")
+    # Atomic: this file holds the user's permissions allowlist, env vars
+    # and statusline config, none of which this project can regenerate.
+    # A truncated write also breaks the *next* run, since json.loads on
+    # the remains raises before any of our error handling is reached.
+    atomic_write(SETTINGS, json.dumps(data, indent=2) + "\n")
     print(env_status)
     print(f"registered {n} SessionStart hooks in {SETTINGS}")
     print(f"command template: {_build_command(0, n)}")
+    if sizing:
+        target = sizing["chunk_target_bytes"]
+        biggest = sizing["projects"][0] if sizing["projects"] else None
+        if biggest:
+            print(f"derived from largest blob: {biggest['project']} "
+                  f"({biggest['bytes']} B) / {target} B per chunk")
+        # Name the projects that would still lose content, so a corpus
+        # that has outgrown even the 64-chunk ceiling is stated outright
+        # rather than left to show up as garbled context later. Compares
+        # the server's measured `needed`, not a byte estimate — the two
+        # disagree, and the estimate is the optimistic one.
+        over = [
+            p for p in sizing["projects"]
+            if p.get("widest_at_recommended", 0) > target
+        ]
+        if over:
+            print()
+            print(f"warning: {len(over)} project(s) still split over "
+                  f"{target} B at {n} chunks and may be truncated:")
+            for p in over[:5]:
+                print(f"    {p['project']}: {p['bytes']} B, worst slice "
+                      f"{p['widest_at_recommended']} B")
+            print("    Trim the pinned rule set for these projects — 64 hook")
+            print("    entries is the chunk route's ceiling.")
+    elif override is None:
+        print(f"note: count is the {FALLBACK_CHUNKS}-chunk fallback, not measured")
     print()
     print("All set. Open a new Claude Code session in any project — its first")
     print(f"system context will carry {n} inline chunks (~{n}x ~1.7KB ≈ {n*17//10}KB)")

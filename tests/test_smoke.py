@@ -63,14 +63,19 @@ def test_module_imports_without_deployment_env(module: str) -> None:
 # in the UI and silently dropped by the type filters. These check the
 # copies against the enum instead of checking the enum against itself.
 #
-# Two copies are importable constants. The browse filter's is not — it is
+# Four copies are importable constants. The browse filter's is not — it is
 # an inline list inside a dict literal in a request handler — so it is
-# read out of the source with `ast`. The colour map in
-# `app/templates/graph.html` is NOT covered here: extracting it means
-# parsing a JavaScript object literal out of a Jinja template, which is
-# more fragility than the check is worth. A type added without a colour
-# there degrades to a default colour rather than breaking, which is why
-# it is the one copy left unguarded.
+# read out of the source with `ast`. Two copies are NOT covered here, both
+# because extracting them means parsing a literal out of a template: the
+# colour map in `app/templates/graph.html`, and the type dropdown in
+# `app/templates/_note_card.html`. That is more fragility than the checks
+# are worth, but the two degrade differently and it is worth knowing which
+# is which. A missing colour falls back to a default and nothing breaks. A
+# missing dropdown option is worse: the select has no matching entry, so
+# the browser posts the empty "auto (reclassify)" value and saving the note
+# resets it to `unsorted`. The `_MANUAL_TYPES` check below is the practical
+# guard on that one, since the dropdown and that constant are edited
+# together or the edit route rejects the type outright.
 
 
 def _browse_filter_type_lists() -> list[list[str]]:
@@ -117,19 +122,184 @@ def test_browse_filter_offers_every_note_type(types: list[str]) -> None:
     assert set(types) == set(get_args(NoteType))
 
 
-@pytest.mark.parametrize("module_name", ["app.mcp_server", "app.classify"])
-def test_valid_types_are_declared_note_types(module_name: str) -> None:
-    """`VALID_TYPES` sets must not name a type `NoteType` lacks.
+@pytest.mark.parametrize("module_name,attr,excluded", [
+    # `unsorted` is the classifier's own default bucket, so no MCP caller
+    # should be able to write it by hand. Reads are a different question —
+    # see the READABLE_TYPES check below.
+    ("app.mcp_server", "VALID_TYPES", {"unsorted"}),
+    # The web edit form's manual-type whitelist: everything the type
+    # dropdown offers except the "auto (reclassify)" option, which posts an
+    # empty string rather than 'unsorted'.
+    ("app.routes.notes", "_MANUAL_TYPES", {"unsorted"}),
+    # The classifier must never assign `rule` or `skill` — both are authored
+    # deliberately — and never re-derive `unsorted`.
+    ("app.classify", "VALID_TYPES", {"rule", "skill", "unsorted"}),
+])
+def test_valid_types_are_declared_note_types(
+    module_name: str, attr: str, excluded: set[str]
+) -> None:
+    """Each type whitelist must be exactly `NoteType` minus its exclusions.
 
-    Subset, not equality, and deliberately so — both are narrower than
-    `NoteType` on purpose. `app.classify` excludes `rule` and `unsorted`
-    because the classifier must never assign them, and `app.mcp_server`
-    excludes `unsorted` from its search filter. What this catches is a
-    typo or a stale literal: a member here that no longer exists in the
-    enum, which in `mcp_server` coerces the filter to `None` and silently
-    returns unfiltered results.
+    Equality against a declared exclusion set, not a subset assertion. A
+    subset catches a stale literal — a member the enum no longer has — but
+    it cannot catch the opposite and more damaging case: a type added to
+    `NoteType` and forgotten here. That direction fails silently, in a
+    different way at each site: `mcp_server` rejects the write, so a note
+    typed by hand never gets the type it asked for; `routes.notes` 400s the
+    edit form, leaving the type unselectable in the card so the form posts
+    "auto" and the save resets the note to 'unsorted'; `classify` logs and
+    falls back to 'idea'. Naming the exclusions keeps the deliberate
+    narrowing intact while making the next added type fail loudly, and
+    point at the constant to update.
     """
     import importlib
 
-    valid = importlib.import_module(module_name).VALID_TYPES
-    assert set(valid) <= set(get_args(NoteType))
+    valid = getattr(importlib.import_module(module_name), attr)
+    assert set(valid) == set(get_args(NoteType)) - excluded
+
+
+def test_readable_types_covers_every_declared_note_type() -> None:
+    """`READABLE_TYPES` is the read-filter set and must span the whole enum.
+
+    Separate from the write gate on purpose: `unsorted` is a real state a
+    caller may want to list but must not assign by hand, so the read set is
+    a strict superset. Collapsing the two is what let `search(type='skill')`
+    return unfiltered results while `skill` was missing from the write gate
+    — an unrecognized filter used to coerce to `None`, and a `None` filter
+    means "no filter" rather than "no matches", so the caller got a full
+    result set it believed was narrowed. Both read sites now error instead,
+    which only stays correct while this set spans the enum.
+    """
+    from app.mcp_server import READABLE_TYPES
+
+    assert set(READABLE_TYPES) == set(get_args(NoteType))
+
+
+# --- unrecognized types are rejected, not coerced ---------------------------
+#
+# These stay in the import-level suite deliberately: every guard below runs
+# before the tool touches a database, so they need no fixture. That ordering
+# is the property under test as much as the error is — a guard that ran after
+# the lookup would still be correct, but only reachable with a database, and
+# the version of this bug that shipped was one nobody could cheaply test for.
+
+
+def _tool(name: str):
+    """The plain function behind an MCP tool name.
+
+    Whether the module-level name is the function itself or a FastMCP tool
+    object wrapping it depends on how the server was registered, so unwrap
+    only if there is something to unwrap.
+    """
+    import app.mcp_server as mcp_server
+
+    tool = getattr(mcp_server, name)
+    return getattr(tool, "fn", tool)
+
+
+@pytest.mark.parametrize("tool,kwargs", [
+    ("infoguana_search", {"query": "x", "type": "bogus"}),
+    ("infoguana_add", {"content": "x", "type": "bogus"}),
+    ("infoguana_update", {"id": 1, "type": "bogus"}),
+    ("infoguana_context", {"project": "infoguana", "include_types": ["bogus"]}),
+])
+def test_unrecognized_type_is_an_error(tool: str, kwargs: dict) -> None:
+    """An unknown type must fail loudly rather than degrade to a default.
+
+    Each of these once spelled its check `type if type in VALID_TYPES else
+    None` and carried on. On a read that means "no filter" rather than "no
+    matches", so the caller got a full result set it believed was narrowed;
+    on a write it meant the note fell through to the classifier, which
+    cannot produce `rule` or `skill` at all, so a typo silently landed the
+    note under the wrong type and no later session could tell.
+    """
+    result = _tool(tool)(**kwargs)
+
+    assert "error" in result, f"{tool} accepted an unrecognized type"
+
+
+def test_unsorted_is_readable_but_not_writable() -> None:
+    """The asymmetry the two sets exist to express.
+
+    `unsorted` is a legitimate thing to filter a read by — the browse UI
+    offers it — but assigning it by hand is the classifier's job, not a
+    caller's. A single set cannot say both, which is why there are two.
+
+    Only the write half is asserted at its call site. The read half is
+    checked against `READABLE_TYPES` instead: a read that *accepts* the
+    type goes on to query the database, so calling it here would need a
+    fixture this module deliberately does without.
+    """
+    from app.mcp_server import READABLE_TYPES, VALID_TYPES
+
+    assert "unsorted" in READABLE_TYPES
+    assert "unsorted" not in VALID_TYPES
+    assert "error" in _tool("infoguana_add")(content="x", type="unsorted")
+
+
+# --- preview payloads stay preview-sized ------------------------------------
+
+
+def _note(**overrides):
+    """A minimal in-memory `Note`; no database involved."""
+    from datetime import datetime
+
+    from app.models import Note
+
+    fields = {
+        "id": 1, "content": "body", "preview": "preview text", "type": "skill",
+        "project": "infoguana", "tags": [], "source": "test",
+        "created_at": datetime(2026, 1, 1), "updated_at": datetime(2026, 1, 1),
+    }
+    fields.update(overrides)
+    return Note(**fields)
+
+
+def test_long_provenance_is_clamped_only_in_preview_mode() -> None:
+    """Preview hits must not smuggle an unbounded field past the budget.
+
+    `provenance_note` is the one serialized field with no length discipline,
+    and `skill` notes carry the longest ones in the corpus — enough that a
+    single hit cost several times what a preview is budgeted for, while the
+    caller reasonably assumed a preview-sized response. Clamping is
+    preview-only: `get` and `expand_top` callers have already accepted the
+    cost of a full body.
+    """
+    from app.mcp_server import PREVIEW_PROVENANCE_CHARS, _note_dict
+
+    note = _note(provenance_note="x" * 5000)
+
+    clamped = _note_dict(note, preview=True)["provenance_note"]
+    assert len(clamped) <= PREVIEW_PROVENANCE_CHARS + 1  # + the ellipsis
+    assert clamped.endswith("…")
+    assert _note_dict(note, preview=False)["provenance_note"] == "x" * 5000
+
+
+def test_short_provenance_is_passed_through_unchanged() -> None:
+    """The clamp must not touch the common case or append a false ellipsis."""
+    from app.mcp_server import _note_dict
+
+    note = _note(provenance_note="stated by the user")
+
+    assert _note_dict(note, preview=True)["provenance_note"] == "stated by the user"
+
+
+# --- edge inference recognizes every note type ------------------------------
+
+
+@pytest.mark.parametrize("word", sorted(set(get_args(NoteType)) - {"unsorted"}))
+def test_note_type_words_are_type_hinted_references(word: str) -> None:
+    """`<type> #N` in prose must register as a type hint, not a bare `#N`.
+
+    `_scan_text` grades a match by whether the type word captured, and
+    `infer_edges` discards bare proposals unless explicitly asked for them.
+    So a type missing from the prefix list does not produce a worse edge —
+    it produces no edge at all, silently, which is indistinguishable from
+    the note simply not referring to anything.
+    """
+    from app.inference import _BARE_RE
+
+    match = _BARE_RE.search(f"see {word} #123 for context")
+
+    assert match is not None, f"{word} #123 did not match at all"
+    assert match.group(1) is not None, f"{word} #123 registered as a bare reference"

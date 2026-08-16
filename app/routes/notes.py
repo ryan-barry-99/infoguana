@@ -342,7 +342,8 @@ async def complete_plan_form(
     return templates.TemplateResponse(request, "_note_card.html", {"note": note})
 
 
-_MANUAL_TYPES = {"idea", "memory", "feedback", "feature", "reference", "plan", "task", "rule"}
+_MANUAL_TYPES = {"idea", "memory", "feedback", "feature", "reference", "plan",
+                 "task", "rule", "skill"}
 
 
 @router.post("/{note_id}/edit", response_class=HTMLResponse)

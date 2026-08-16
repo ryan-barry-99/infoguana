@@ -37,7 +37,14 @@ mcp = FastMCP(
 )
 
 
-VALID_TYPES = {"idea", "memory", "feedback", "feature", "reference", "plan", "task", "rule"}
+VALID_TYPES = {"idea", "memory", "feedback", "feature", "reference", "plan",
+               "task", "rule", "skill"}
+# Types a caller may *filter reads by*. Superset of the write set because
+# `unsorted` is a real state worth listing but not worth assigning by hand.
+# Kept as its own name: the two sets answer different questions, and
+# collapsing them is what once made `search(type='skill')` silently return
+# unfiltered results when `skill` was missing from the write gate.
+READABLE_TYPES = VALID_TYPES | {"unsorted"}
 VALID_EDGE_TYPES = {
     "implements", "caused_by", "supersedes", "references",
     "bundled_with", "prerequisite_for",
@@ -50,6 +57,8 @@ VALID_CONFIDENCES = {"stated", "inferred", "speculative", "unspecified"}
 # can't reintroduce the full-mode regression. get_many is the explicit
 # escape hatch when an agent legitimately needs many bodies at once.
 MAX_EXPAND_TOP = 5
+# Ceiling on `provenance_note` in preview-mode hits. See `_note_dict`.
+PREVIEW_PROVENANCE_CHARS = 200
 # Max ids get_many can pull in one call. Bounded so a runaway loop or
 # misread can't drag in the whole corpus.
 MAX_GET_MANY = 20
@@ -108,7 +117,18 @@ def _note_dict(note, preview: bool = False) -> dict:
     # free-text detail only when set.
     d["confidence"] = note.confidence
     if note.provenance_note:
-        d["provenance_note"] = note.provenance_note
+        # Clamp in preview mode. A preview hit is budgeted at roughly a
+        # preview's worth of tokens, and provenance is the one field with
+        # no length discipline at all — `skill` notes average ~1000 chars
+        # of it against a ~140-char preview, so an unclamped hit costs
+        # several times what the caller budgeted for it. Full text stays
+        # on expand_top / get / get_many, where a full body is expected.
+        if preview and len(note.provenance_note) > PREVIEW_PROVENANCE_CHARS:
+            d["provenance_note"] = (
+                note.provenance_note[:PREVIEW_PROVENANCE_CHARS].rstrip() + "…"
+            )
+        else:
+            d["provenance_note"] = note.provenance_note
     return d
 
 
@@ -181,7 +201,8 @@ def infoguana_search(
     Args:
         query: Natural language search query.
         limit: Max results to return (default 10).
-        type: Optional filter: idea|memory|feedback|feature|reference|plan.
+        type: Optional filter: idea|memory|feedback|feature|reference|plan|
+            task|rule|skill|unsorted. An unrecognized type is an error.
         project: Optional filter to a specific project name.
         include_edges: Attach typed-edge neighbors to each hit (default False).
         confirmed_only: When include_edges, skip unconfirmed agent-proposed
@@ -189,7 +210,12 @@ def infoguana_search(
         expand_top: Inline full bodies for this many top hits (default 0,
             max 5). Rest stay as previews.
     """
-    type_filter: Optional[NoteType] = type if type in VALID_TYPES else None  # type: ignore[assignment]
+    # Error rather than dropping an unrecognized filter. Silently returning
+    # unfiltered hits is worse than no filter at all: the caller reasons
+    # about the result set as if it were narrowed.
+    if type is not None and type not in READABLE_TYPES:
+        return {"error": f"type must be one of {sorted(READABLE_TYPES)}"}
+    type_filter: Optional[NoteType] = type  # type: ignore[assignment]
     try:
         qv = embed.engine().embed(query)
     except Exception:
@@ -303,6 +329,13 @@ def infoguana_add(
     constraints the user has stated — don't infer rules from observed
     patterns.
 
+    Use type='skill' for a packaged procedure an agent follows in place of
+    its default approach — a SKILL.md document stored verbatim, whose
+    description says *when* to use it and whose body says *how*. Like
+    'rule', it is authored by hand and never assigned by the classifier.
+    Write one only when the user asks for it; a how-to you inferred belongs
+    in a 'reference' note instead.
+
     After the note saves, scan its content for relationships to existing
     notes — explicit `#NNN` references, "this supersedes the old decision",
     "this implements plan X", "the bug in #42 was caused by Y". For each one
@@ -334,7 +367,15 @@ def infoguana_add(
     inferred it. The whole point of the field is to keep your future self
     from treating a guess as a fact.
     """
-    t: Optional[NoteType] = type if type in VALID_TYPES else None  # type: ignore[assignment]
+    # A bad write persists where a bad read is retried. Coercing an
+    # unrecognized type to None hands the note to the classifier, and the
+    # classifier cannot produce `rule` or `skill` by design — so a typo'd
+    # `type='Skill'` silently became a `reference` and no future session
+    # learned the capability existed.
+    if type is not None and type not in VALID_TYPES:
+        return {"error": f"type must be one of {sorted(VALID_TYPES)} "
+                         f"(got {type!r}); omit it to let the classifier decide"}
+    t: Optional[NoteType] = type  # type: ignore[assignment]
     try:
         parsed_due = duedate.parse_due_input(due_date)
     except ValueError as e:
@@ -505,7 +546,7 @@ def infoguana_update(
     Args:
         id: Note id (from search / recent results).
         content: New content (full replacement).
-        type: idea|memory|feedback|feature|reference|plan.
+        type: idea|memory|feedback|feature|reference|plan|task|rule|skill.
         project: Project to attribute the note to.
         tags: New tag list (full replacement — pass all tags you want kept).
         status: For plans only — not_started|pending|complete.
@@ -513,10 +554,16 @@ def infoguana_update(
         confidence: stated|inferred|speculative|unspecified.
         provenance_note: Free-text source detail; '' clears.
     """
+    # Validate the argument before the lookup: a bad type is wrong whether or
+    # not the id resolves, and checking first keeps this reachable without a
+    # database.
+    if type is not None and type not in VALID_TYPES:
+        return {"error": f"type must be one of {sorted(VALID_TYPES)} "
+                         f"(got {type!r})", "id": id}
     existing = db.get_note(id)
     if not existing:
         return {"error": "not found", "id": id}
-    t: Optional[NoteType] = type if type in VALID_TYPES else None  # type: ignore[assignment]
+    t: Optional[NoteType] = type  # type: ignore[assignment]
     if status is not None:
         if status not in VALID_PLAN_STATUSES:
             return {"error": f"status must be one of {sorted(VALID_PLAN_STATUSES)}", "id": id}
@@ -687,13 +734,18 @@ def infoguana_context(
         budget_tokens: Approximate token budget for returned notes (default 4000).
         max_hops: Cap on BFS depth (default 4).
         include_types: If set, only return notes of these types
-            (idea|memory|feedback|feature|reference|plan).
+            (idea|memory|feedback|feature|reference|plan|task|rule|
+            skill|unsorted). An unrecognized type is an error.
         expand_top: Inline full bodies for this many top notes (default 0,
             max 5). Rest stay as previews.
     """
     filt: Optional[list[str]] = None
     if include_types:
-        filt = [t for t in include_types if t in VALID_TYPES] or None
+        unknown = sorted(set(include_types) - READABLE_TYPES)
+        if unknown:
+            return {"error": f"unknown types {unknown}; "
+                             f"valid: {sorted(READABLE_TYPES)}"}
+        filt = list(include_types)
     return graph.build_context(
         project=project,
         budget_tokens=budget_tokens,

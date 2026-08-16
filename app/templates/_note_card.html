@@ -407,7 +407,7 @@
       class="w-full rounded-lg bg-slate-950 border border-slate-700 focus:border-slate-500 focus:outline-none px-3 py-2 text-sm text-slate-100"
     >
       <option value="">auto (reclassify)</option>
-      {% for t in ['idea', 'memory', 'feedback', 'feature', 'reference', 'plan', 'task', 'rule'] %}
+      {% for t in ['idea', 'memory', 'feedback', 'feature', 'reference', 'plan', 'task', 'rule', 'skill'] %}
         <option value="{{ t }}" {% if note.type == t %}selected{% endif %}>{{ t }}</option>
       {% endfor %}
     </select>

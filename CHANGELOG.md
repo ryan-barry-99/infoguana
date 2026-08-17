@@ -6,7 +6,7 @@ Notable changes to infoguana. Format follows
 This file starts partway through the project's life; changes before the first
 entry below are recorded only in the commit history.
 
-## Unreleased
+## v0.2.0 — 2026-08-17
 
 ### Added
 

@@ -1,7 +1,7 @@
 """Synthesize a plan's edge subgraph into one comprehensive markdown doc by
 spawning `claude -p` over the hydrated notes + linked PR context.
 
-Replaces the per-note file dump (plan #221, phase 5) — users wanted "one doc
+Replaces the per-note file dump — users wanted "one doc
 to read" rather than a folder of fragments to parse manually. The agent is
 called with no tools: we pre-traverse the subgraph, pre-fetch the PR data,
 and hand the synthesis a self-contained prompt.
@@ -88,9 +88,12 @@ inline them into prose.
 duplicate facts, sequence events chronologically, resolve contradictions \
 between notes (and call out which won and why if the notes disagree). Do \
 not drop details to make the doc shorter.
-- **Cite sources inline.** When a fact comes from a specific note, write \
-`(see #149)` or similar so the reader can trace it. Same for PRs: cite by \
-number (`PR #144`).
+- **Cite sources inline.** When a fact comes from a specific note, name \
+the note by its title (`see the "FTS5 BM25 tuning" note`) — never by id. \
+Exports get committed to repos, where a bare `#149` resolves for nobody \
+outside an agent session and rots the moment the note is merged or \
+deleted. PRs are the opposite case and should be cited by number \
+(`PR #144`): those are public and stable.
 
 ## Structure (use what fits, omit empty sections, add others as needed)
 

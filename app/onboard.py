@@ -1,13 +1,15 @@
 """SessionStart context builder. The /onboard/<project> endpoint and the
 infoguana-onboard hook script both call build() to produce a single text blob
-that gets injected into a fresh Claude Code session."""
+that gets injected into a fresh agent session. The blob is agent-neutral —
+Claude Code and Codex both consume it — so nothing here should name a
+specific agent or its private file layout."""
 import threading
 import time
 
 from app import db, graph
 
 
-# Per-project memoization of build() output. Note #374's chunked SessionStart
+# Per-project memoization of build() output. The chunked SessionStart
 # hooks fire 16 simultaneous GETs against /onboard/<project>/chunk/<i>; each
 # would otherwise call build() concurrently and race on the single shared
 # SQLite connection in db.py, producing InterfaceError / IndexError 500s.
@@ -19,7 +21,8 @@ _build_lock = threading.Lock()
 
 
 DEFAULT_PROTOCOL = """\
-You are a Claude Code agent connected to the user's shared cross-project \
+You are a coding agent (Claude Code, Codex, or similar) connected to the \
+user's shared cross-project \
 **infoguana** via the `infoguana` MCP server. Infoguana is the user's authoritative \
 memory across every project they work on. Use it.
 
@@ -114,7 +117,7 @@ near-duplicate it
 def build(project: str, budget_tokens: int = 4000) -> str:
     """Produce the plain-text blob that goes into additionalContext.
 
-    Note #374: the harness caps each hook's `additionalContext` at ~2KB
+    The harness caps each hook's `additionalContext` at ~2KB
     inline, but the cap is *per-hook*, not aggregate. The install script
     therefore registers N (default 16) UserPromptSubmit hook entries that
     each fetch a different line-aligned slice of this blob via
@@ -205,6 +208,15 @@ def build_cached(project: str, budget_tokens: int = 4000) -> str:
         cached = _build_cache.get(key)
         if cached and cached[1] > now:
             return cached[0]
+        # Expiry is checked on read but nothing else removes an entry, so
+        # a miss is the only chance to drop stale ones. That was harmless
+        # while a request inserted one key; /onboard/sizing inserts one
+        # per project, and budget_tokens is caller-controlled, so every
+        # distinct budget mints a fresh key for every project (~0.6 MB
+        # retained per sizing request against a 27-project corpus).
+        # Pruning here bounds the dict at the live working set.
+        for stale in [k for k, v in _build_cache.items() if v[1] <= now]:
+            del _build_cache[stale]
         blob = build(project=project, budget_tokens=budget_tokens)
         _build_cache[key] = (blob, now + _BUILD_CACHE_TTL_SECONDS)
         return blob

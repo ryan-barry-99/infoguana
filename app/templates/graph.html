@@ -189,7 +189,7 @@
   text.project-label.dimmed { opacity: 0.1; }
   text.project-label.emphasized { opacity: 1; }
   .graph-link.dimmed { opacity: 0.12; }
-  /* Synthetic global→project tendons (#357) — dashed, low-opacity
+  /* Synthetic global→project tendons — dashed, low-opacity
      edges from each global note (project=None) to every project node
      so the universality of globals reads visually instead of letting
      them float as orphans. Pure render layer: not in the layout edge
@@ -314,7 +314,7 @@
   // On by default — dims everything not related to the current selection
   // so the focal cluster reads at a glance. Persisted per-browser.
   let focusDimEnabled = localStorage.getItem('graph.focusDim') !== '0';
-  // On by default — render synthetic global→project tendons (#357).
+  // On by default — render synthetic global→project tendons.
   // O(globals × projects) edges; the user can switch them off if the
   // graph gets dense enough that the dashed clutter starts competing
   // with real semantic edges. Persisted per-browser.
@@ -902,7 +902,7 @@
     } else if (d.kind === 'note') {
       if (d.project) ids.add('project:' + d.project);
       else {
-        // Global note (#357): tendons reach every project, so every
+        // Global note: tendons reach every project, so every
         // project is "related" when a global is focused — otherwise
         // focus-dim mutes the very edges that make the global global.
         nodeById.forEach(n => { if (n.kind === 'project') ids.add(n.id); });
@@ -1246,7 +1246,7 @@
   }
 
   // Hovering a note or project node lights up its incident edges so the
-  // user can see its connections at a glance. For globals (#357) the
+  // user can see its connections at a glance. For globals the
   // tendons heat up; for project-scoped notes the semantic edges glow;
   // hovering a project node lights up every member's in_project edge plus
   // every tendon reaching it from a global. Tag nodes still skipped —
@@ -1736,7 +1736,7 @@
       .map(l => ({...l, source: nodeById.get(l.source), target: nodeById.get(l.target)}))
       .filter(l => l.source && l.target);
 
-    // Synthetic global→project tendons (#357). Drawn beneath linkSel so
+    // Synthetic global→project tendons. Drawn beneath linkSel so
     // real semantic edges paint on top — tendons are decoration that
     // signals "this global reaches everywhere", not graph structure.
     const tendons = (data.tendons || [])

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One-shot backfill: populate the new `preview` column for every note that
-doesn't have one yet (plan #322).
+doesn't have one yet.
 
 Walks notes ordered by id ascending; for each null-preview row, runs
 pipeline.process_note which will:

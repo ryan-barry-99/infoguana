@@ -44,7 +44,7 @@ def complete_plan(
     if updated is None:
         raise PlanCompletionError(500, f"update failed for note {id}")
 
-    # Plan #293 auto-advance: when a bundled task completes, flip the next
+    # Auto-advance: when a bundled task completes, flip the next
     # not_started sibling to pending so the agent's context only ever shows
     # the immediate next step's full body.
     if existing.type == "task":

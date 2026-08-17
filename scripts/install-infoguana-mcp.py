@@ -21,6 +21,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _infoguana_setup import atomic_write  # noqa: E402
+
 REPO_DIR = Path(__file__).resolve().parent.parent
 SRC = REPO_DIR / "data" / "mcp.json"
 DEST = Path.home() / ".claude.json"
@@ -57,7 +60,7 @@ def main() -> int:
         return 1
 
     if not DEST.exists():
-        DEST.write_text("{}")
+        atomic_write(DEST, "{}")
 
     raw = DEST.read_text().strip() or "{}"
     dest = json.loads(raw)
@@ -65,7 +68,11 @@ def main() -> int:
 
     prev = servers.get("infoguana")
     servers["infoguana"] = infoguana_entry
-    DEST.write_text(json.dumps(dest, indent=2) + "\n")
+    # ~/.claude.json holds every project's Claude Code history and MCP
+    # config. write_text truncates to zero before writing, so an interrupt
+    # or a full disk between those moments destroys a file this project
+    # cannot regenerate.
+    atomic_write(DEST, json.dumps(dest, indent=2) + "\n")
 
     url = infoguana_entry.get("url", "?")
     if prev == infoguana_entry:

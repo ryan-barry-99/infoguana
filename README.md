@@ -211,6 +211,181 @@ are preserved on refresh.
 That's it. Open Claude Code in any project and the first user message
 auto-loads infoguana's project context.
 
+## Using Codex instead of — or alongside — Claude Code
+
+infoguana is not tied to one agent. The corpus is the durable thing; the
+agent reading it is a free choice, and both can be installed at once so
+you can switch without losing continuity.
+
+```bash
+python scripts/install-infoguana-codex.py
+```
+
+This writes a managed block into `~/.codex/config.toml` registering the
+MCP server and a set of `SessionStart` hooks, and reuses the same
+`~/.infoguana.env` the Claude Code installer creates — one credential
+file, one server, one corpus. Everything outside the marker comments in
+`config.toml` is preserved, so hand-edited settings survive re-runs.
+
+It works because Codex implements a Claude-Code-compatible hook wire
+format: a hook returning
+`{"hookSpecificOutput": {"hookEventName": ..., "additionalContext": ...}}`
+is understood by both, so `scripts/infoguana-onboard-chunk.py` serves
+either agent unmodified. The hook adapts only its memory-override text, naming
+whichever built-in memory store to leave alone; force it with
+`INFOGUANA_AGENT=claude|codex` if autodetection guesses wrong.
+
+**If you are upgrading an existing install**, edit the stored protocol in
+the web UI once. Its opening line addresses the agent as Claude Code, and
+it is seeded only when absent — your deployment kept the wording it was
+first installed with, so a Codex session receives that opening alongside
+the Codex-specific memory-override text and has to reconcile the two.
+Fresh installs already carry agent-neutral wording.
+
+Two steps remain that the installer can't do for you.
+
+### 1. Give Codex the bearer token
+
+For an HTTP MCP server, Codex does not read the token from
+`config.toml` — it reads the environment variable named there
+(`INFOGUANA_TOKEN`) from its own process, once, at startup. That's
+a feature: your secret stays in `~/.infoguana.env` (mode 600) instead of
+sitting in a config file. But it means the variable has to be set in
+whatever launches Codex.
+
+Add this to your shell startup file (`~/.bashrc`, `~/.zshrc`):
+
+```bash
+if [ -f "$HOME/.infoguana.env" ]; then
+    . "$HOME/.infoguana.env"
+    export INFOGUANA_TOKEN
+fi
+```
+
+Note this is deliberately *not* `INFOGUANA_MCP_SECRET`, which is the
+server's own variable. If you run the server with Docker Compose on this
+same machine, exporting that name from your shell would feed the old
+token back to `docker compose up` — so deleting `data/.mcp_secret` to
+rotate the secret would silently leave the server accepting the token you
+meant to revoke.
+
+Then make Codex actually see it:
+
+- **Running `codex` in a terminal** — open a new terminal. Done.
+- **Running Codex as an IDE extension** — the extension inherits its
+  environment from the editor process, which inherits from the shell
+  that started it. Restart the editor. Reloading the window is usually
+  *not* enough: with a remote/server setup (VS Code Remote-SSH, dev
+  containers, Codespaces) the server process survives reloads and keeps
+  its old environment. Kill the server and reconnect — in VS Code,
+  *Remote-SSH: Kill VS Code Server on Host*.
+
+If your shell startup file skips non-interactive shells (Debian's
+default `~/.bashrc` starts with `[ -z "$PS1" ] && return`), an
+IDE-launched process may not reach the block at all. Prefer telling your
+editor directly — VS Code's `terminal.integrated.env.*`, a systemd user
+environment, or the desktop entry that launches it — rather than moving
+the block above that guard.
+
+Moving it above the guard does work, but it puts the token in the
+environment of *every* non-interactive shell on the machine: cron jobs,
+git hooks, `ssh host <cmd>`, and any build or install script you run.
+Each of those can read it from `/proc/<pid>/environ`, and tooling that
+dumps `env` for diagnostics will write it to a log. That is a much wider
+exposure than the mode-600 file it came from.
+
+Check it landed — in a new terminal, and expect a non-zero length:
+
+```bash
+echo ${#INFOGUANA_TOKEN}
+```
+
+#### If the agent runs in a container
+
+A dev container, Codespace, or any containerized agent talking to a
+server on the host needs two things changed together — fixing only one
+looks like a networking bug.
+
+1. **The URL.** `localhost` inside a container is the container. Point
+   the installer at the host and it writes that URL into both
+   `config.toml` and `~/.infoguana.env`:
+
+   ```bash
+   INFOGUANA_URL=http://host.docker.internal:8789 \
+       python scripts/install-infoguana-codex.py
+   ```
+
+   Use `host.containers.internal` under Podman. On Linux, Docker only
+   provides `host.docker.internal` if you add
+   `--add-host=host.docker.internal:host-gateway`; otherwise use the
+   host's tailnet IP in preference to a LAN one — infoguana speaks plain
+   HTTP, so on a LAN the bearer crosses the wire in cleartext and anyone
+   who can observe that segment gets full read/write on the corpus. Over
+   the container-to-host gateway or a tailnet, the traffic never reaches
+   an untrusted network.
+
+2. **The token, inside the container.** A shell startup file on the host
+   is irrelevant to a process in a container. Pass it through — in
+   `devcontainer.json`:
+
+   ```jsonc
+   "containerEnv": { "INFOGUANA_TOKEN": "${localEnv:INFOGUANA_TOKEN}" }
+   ```
+
+   or `docker run -e INFOGUANA_TOKEN`. The same applies to the
+   `SessionStart` hook: its interpreter and script path must exist
+   *inside* the container, so mount the repo (or skip the hook there and
+   rely on MCP alone).
+
+### 2. Approve the hook in Codex
+
+Codex records a trust hash per hook and ignores hooks it hasn't been
+told to trust, so the `SessionStart` hook stays inert until you accept
+it in the Codex UI. Interactively, MCP tools work either way — the
+auto-injected project context is what that trust gates.
+
+Non-interactive `codex exec` is stricter, and the difference matters if
+you script an agent: there, tool calls are refused outright with "user
+cancelled MCP tool call" and hooks do not run, since neither approval
+nor hook trust can be granted with nobody watching. Setting
+`default_tools_approval_mode` (below) did not lift it in 0.145.0. The
+escape hatches are `--dangerously-bypass-approvals-and-sandbox` and
+`--dangerously-bypass-hook-trust`, which are as dangerous as they sound
+— the first also disables sandboxing for model-generated shell commands.
+
+### Stop the per-call approval prompts
+
+By default Codex asks before each MCP tool call, which is tedious for a
+memory server you query constantly. Set a server-wide default:
+
+```toml
+[mcp_servers.infoguana]
+default_tools_approval_mode = "auto"
+```
+
+Accepted values are `auto`, `prompt`, `writes`, and `approve`. `auto`
+never asks; `writes` is the middle ground, letting reads through and
+asking before anything that modifies a note.
+
+Approving a single tool from the Codex UI writes a *per-tool* override
+that outranks this default:
+
+```toml
+[mcp_servers.infoguana.tools.search]
+approval_mode = "approve"
+```
+
+If one tool keeps prompting after you set the default, that's why —
+delete its `[mcp_servers.infoguana.tools.*]` table. Both this setting
+and the hook-trust state Codex records are preserved when the installer
+regenerates its block.
+
+### Verify
+
+`codex mcp list` should show infoguana with `Auth: Bearer token`, and
+`codex doctor` reports a missing-env-var warning under `mcp` until step
+1 takes effect.
+
 ## Wire up a project
 
 For each project where Claude Code should use infoguana, drop a small
@@ -231,8 +406,19 @@ python scripts/init-project-infoguana.py <project-name> [target-dir]
 `<project-name>` is the key infoguana uses to scope notes (usually the
 repo's directory name — keep it consistent so notes stay grouped). If
 `[target-dir]` is omitted, the file lands in the current directory.
-After writing, edit the generated `CLAUDE.md` to fill in the one-line
-project description and `<AUTHOR>` placeholder, then commit.
+After writing, edit the generated file to fill in the one-line project
+description and `<AUTHOR>` placeholder, then commit.
+
+Each agent reads a different filename, so pass `--agent` to match yours:
+
+```bash
+python scripts/init-project-infoguana.py <project-name> --agent codex   # AGENTS.md
+python scripts/init-project-infoguana.py <project-name> --agent both    # and CLAUDE.md
+```
+
+The default is `claude` (`CLAUDE.md`). The body is identical either way —
+it only points at infoguana — so `both` is the right choice for a repo
+whose contributors don't all use the same agent.
 
 ### Option B — user-private (`infoguana-onboard` Claude Code skill)
 

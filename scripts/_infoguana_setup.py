@@ -1,0 +1,555 @@
+"""Shared helpers for the agent installers (Claude Code, Codex).
+
+Both installers need the same two things before they can write any
+agent-specific config: the server's bearer token + base URL, and a
+~/.infoguana.env for the SessionStart hook to read at runtime. The
+resolution order below is deliberately broad — infoguana is deployed
+both as the documented Docker stack and as a bare systemd/venv service,
+and only the former produces data/mcp.json.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import sys
+import tempfile
+import urllib.request
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from urllib.parse import quote_plus, urlparse, urlunparse
+
+ENV_FILE = Path.home() / ".infoguana.env"
+
+DEFAULT_URL = "http://localhost:8789"
+
+
+def atomic_write(path: Path, text: str, mode: int | None = None) -> None:
+    """Write `text` to `path` without ever leaving it truncated.
+
+    `Path.write_text` opens with "w", which truncates to zero before a
+    single byte is written. An interrupt or a full disk between those two
+    moments leaves the target empty, and these are user-owned files this
+    project cannot regenerate — `~/.claude/settings.json` carries the
+    permissions allowlist, `~/.infoguana.env` carries the token.
+
+    Writes a sibling temp file (same directory, so `os.replace` is a
+    rename within one filesystem and therefore atomic), then replaces.
+    `os.replace` preserves neither mode nor ownership, so `mode` is
+    applied to the temp file *before* the rename — which also closes the
+    window where a 0600 file briefly exists at the umask default.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
+                                    prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if mode is not None:
+            try:
+                os.chmod(tmp, mode)  # POSIX only; no-op-ish on Windows
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Parse a shell-style .env file (KEY=VALUE, optional `export`,
+    surrounding quotes, # comments) into a dict. Missing file yields {}.
+    Cross-platform replacement for bash `source`."""
+    if not path.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        out[key.strip()] = _unquote(value.strip())
+    return out
+
+
+def _unquote(value: str) -> str:
+    """Undo shell quoting on an env-file value.
+
+    Stripping matching outer quotes is not enough: `shlex.quote` renders
+    an embedded single quote as `'has'"'"'quote'`, which has matching
+    outer quotes and is *not* what the shell would produce on read. Ask
+    shlex instead, so what `ensure_infoguana_env` writes is exactly what
+    comes back.
+
+    Falls back to the raw text whenever shlex sees anything other than a
+    single token — an unquoted value with spaces, or a hand-edited line
+    with unbalanced quotes. Those are the legacy shapes this file has
+    always tolerated, and guessing at them is worse than passing them
+    through.
+    """
+    try:
+        parts = shlex.split(value)
+    except ValueError:
+        return value
+    return parts[0] if len(parts) == 1 else value
+
+
+def load_env_file(path: Path) -> None:
+    """Load a shell-style .env file into os.environ without overriding
+    vars that are already set."""
+    for key, value in parse_env_file(path).items():
+        os.environ.setdefault(key, value)
+
+
+def authed_request(url: str, token: str, **kwargs) -> urllib.request.Request:
+    """A Request carrying the bearer token, set so it survives no redirect.
+
+    `urlopen` follows 30x responses by default, and
+    `HTTPRedirectHandler.redirect_request` copies every header except
+    Content-Length/Content-Type onto the follow-up request —
+    Authorization is not among the exclusions. A token passed in the
+    plain `headers` dict therefore rides along to whatever host the
+    redirect names, cross-origin included, and this token grants full
+    read/write access to the whole note corpus. `add_unredirected_header`
+    keeps it on the first hop only, which is the only hop that should
+    ever see it: the infoguana endpoints do not redirect.
+
+    The bash variants never had this — `curl -fsS` without `-L` does not
+    follow redirects — so it arrived with the Python port.
+    """
+    req = urllib.request.Request(url, **kwargs)
+    if token:
+        req.add_unredirected_header("Authorization", f"Bearer {token}")
+    return req
+
+
+def _base_url(url: str) -> str:
+    """Strip any path from a URL, leaving scheme://netloc. The MCP endpoint
+    lives at /mcp/ but the onboard endpoints live at /onboard, so hooks
+    need the bare origin."""
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+
+
+def resolve_credentials(repo_dir: Path) -> tuple[str, str]:
+    """Find the bearer token + base URL, raising RuntimeError with an
+    actionable message if nothing works.
+
+    Order, most authoritative first:
+      1. data/.mcp_secret + data/mcp.json — written by the Docker
+         entrypoint on every start, so it tracks secret rotations.
+      2. The repo's own .env — the bare-metal (systemd/venv) install has
+         no data/mcp.json, but INFOGUANA_MCP_SECRET is the same secret.
+      3. An existing ~/.infoguana.env — last resort, e.g. a hand-rolled
+         install whose server config lives somewhere non-standard.
+    """
+    # An explicit INFOGUANA_URL always wins. Every autodetected URL below
+    # resolves to localhost, which is wrong whenever the agent and the
+    # server aren't in the same network namespace — an agent in a
+    # container reaching a server on the host needs the gateway name
+    # (host.docker.internal / host.containers.internal) or the host's IP.
+    url_override = (os.environ.get("INFOGUANA_URL") or "").rstrip("/")
+
+    data = repo_dir / "data"
+    secret_file, mcp_json = data / ".mcp_secret", data / "mcp.json"
+
+    if secret_file.is_file():
+        token = secret_file.read_text().strip()
+        url = DEFAULT_URL
+        if mcp_json.is_file():
+            # The entrypoint rewrites this file on every container start,
+            # so a container killed mid-write leaves it truncated. Falling
+            # back to the default URL beats a JSONDecodeError traceback
+            # that names json/decoder.py rather than infoguana — and the
+            # default is right for every install that isn't remapping the
+            # port anyway.
+            try:
+                mcp = json.loads(mcp_json.read_text())
+                url = _base_url(mcp["mcpServers"]["infoguana"]["url"])
+            except (json.JSONDecodeError, KeyError, TypeError):
+                print(f"warning: {mcp_json} is unreadable or incomplete — "
+                      f"falling back to {DEFAULT_URL}. If the server is on a "
+                      f"non-default port, set INFOGUANA_URL.")
+        return token, url_override or url
+
+    repo_env = parse_env_file(repo_dir / ".env")
+    token = repo_env.get("INFOGUANA_MCP_SECRET", "")
+    if token:
+        port = repo_env.get("INFOGUANA_PORT", "8789")
+        return token, url_override or f"http://localhost:{port}"
+
+    existing = parse_env_file(ENV_FILE)
+    token = existing.get("INFOGUANA_TOKEN", "")
+    if token:
+        return token, url_override or existing.get("INFOGUANA_URL", DEFAULT_URL).rstrip("/")
+
+    raise RuntimeError(
+        f"could not find the infoguana bearer token.\n"
+        f"hint:  looked in {secret_file}, {repo_dir / '.env'} "
+        f"(INFOGUANA_MCP_SECRET), and {ENV_FILE} (INFOGUANA_TOKEN).\n"
+        f"       is the server running? (docker compose up -d --build)"
+    )
+
+
+def ensure_infoguana_env(token: str, base_url: str) -> str:
+    """Create or update ~/.infoguana.env so the SessionStart hooks can
+    reach the server. Preserves any other lines the user added (other env
+    vars, comments). Returns a short status string for the log."""
+    desired = {"INFOGUANA_URL": base_url, "INFOGUANA_TOKEN": token}
+    preserved: list[str] = []
+    existing: dict[str, str] = {}
+
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                preserved.append(line)
+                continue
+            body = stripped
+            if body.startswith("export "):
+                body = body[len("export "):].lstrip()
+            key, _, value = body.partition("=")
+            key = key.strip()
+            if key in desired:
+                existing[key] = value.strip()
+                continue
+            preserved.append(line)
+
+    # This file is `source`d by shell (the hook wrappers, and the README
+    # tells users to add it to their rc file), so a value with a space, a
+    # `#`, or a `;` in it is not just mangled on read — it executes. The
+    # generated secret is hex today, which makes this insurance rather
+    # than a live bug, but a hand-set token or a future base64 generator
+    # turns it live. Quote on write; `parse_env_file` already strips
+    # quotes on read, so the round trip is lossless.
+    #
+    # The comparison below has to be against the *quoted* form, since
+    # that is what a previous run wrote — comparing the raw value would
+    # report "refreshed" on every single run.
+    quoted = {k: shlex.quote(v) for k, v in desired.items()}
+
+    if ENV_FILE.exists() and all(existing.get(k) in (v, quoted[k])
+                                 for k, v in desired.items()):
+        # Re-assert the mode even when the contents need no change. This
+        # is a dotfile in $HOME holding a bearer token: it gets restored
+        # from backups, copied out of a dotfiles repo, or recreated by
+        # hand under a permissive umask. Applying 600 only as part of a
+        # write meant a drifted file kept its mode while the installer
+        # reported it fine and the README promised 600.
+        try:
+            os.chmod(ENV_FILE, 0o600)
+        except OSError:
+            pass  # non-POSIX filesystem; contents are still correct
+        return f"~/.infoguana.env already up-to-date ({ENV_FILE})"
+
+    lines = preserved + [f"{k}={v}" for k, v in quoted.items()]
+    atomic_write(ENV_FILE, "\n".join(lines).rstrip() + "\n", mode=0o600)
+
+    if not existing:
+        return f"created ~/.infoguana.env at {ENV_FILE}"
+    return f"refreshed ~/.infoguana.env at {ENV_FILE}"
+
+
+# ---------------------------------------------------------------------
+# chunk resolution
+# ---------------------------------------------------------------------
+
+# Registered when the server can't tell us the measured count. Deliberately
+# generous: a surplus hook is a no-op (empty slice, nothing emitted), while a
+# shortfall drops rules out of the session silently.
+FALLBACK_CHUNKS = 40
+
+# The chunk route's own ceiling (`of` is rejected above this). Kept here so
+# both installers read one number — they previously hardcoded 64 each and
+# went stale when the route raised its bound.
+MAX_CHUNKS = 128
+
+# The onboard budget assumed when nothing sets INFOGUANA_ONBOARD_BUDGET.
+# Must match the hook's own default in infoguana-onboard-chunk.py and the
+# route's default in app/routes/onboard.py: sizing and delivery have to
+# measure the same blob, and a blob's size is a function of its budget.
+DEFAULT_ONBOARD_BUDGET = "4000"
+
+
+class SizingUnavailable(Exception):
+    """The server could not report a measured chunk count.
+
+    Carries a message that says *which* failure it was, because the two
+    have opposite remedies: an unreachable server is worth retrying, an
+    endpoint the server doesn't implement never will be.
+    """
+
+
+def parse_chunk_override(raw: str | None) -> int | None:
+    """Validate INFOGUANA_HOOK_CHUNKS. None when unset.
+
+    Raises ValueError whose message is ready to print. Deliberately does
+    no I/O so both installers can check it before touching credentials or
+    the network — the cheapest failure should come first, and a guard
+    reachable without a fixture is one that gets tested.
+    """
+    if raw is None:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        raise ValueError("INFOGUANA_HOOK_CHUNKS must be an integer")
+    if not 1 <= n <= MAX_CHUNKS:
+        raise ValueError(f"INFOGUANA_HOOK_CHUNKS must be 1..{MAX_CHUNKS} "
+                         f"(the chunk route's accepted range)")
+    return n
+
+
+def resolve_onboard_budget() -> str:
+    """The onboard budget the installed hook will actually request.
+
+    Mirrors the hook's own resolution order exactly — process env first,
+    then ~/.infoguana.env, then the shared default — because sizing is
+    only meaningful if it measures the blob delivery will fetch. Returned
+    as a string: it is bound straight into a query param, and validating
+    it here would reject values the route itself accepts.
+    """
+    from_env = os.environ.get("INFOGUANA_ONBOARD_BUDGET")
+    if from_env:
+        return from_env
+    return parse_env_file(ENV_FILE).get(
+        "INFOGUANA_ONBOARD_BUDGET", DEFAULT_ONBOARD_BUDGET)
+
+
+def fetch_sizing(base_url: str, token: str,
+                 budget_tokens: str = DEFAULT_ONBOARD_BUDGET) -> dict:
+    """Ask /onboard/sizing how many chunks the largest blob needs.
+
+    `budget_tokens` must be the budget the *hook* will request, not the
+    route's default. Blob size scales with the budget, so sizing at 4000
+    and delivering at 16000 registers a count derived from a different
+    document: measured against a 27-project corpus, 4000 needs 17 chunks
+    where 16000 needs 71, and the shortfall truncates roughly three
+    quarters of every slice at each session start.
+
+    Raises SizingUnavailable rather than returning a sentinel, so the
+    caller reports the actual cause. The non-JSON case is its own branch
+    for a specific reason: `/onboard/sizing` matches the older
+    `/onboard/{project}` route, so a server predating this endpoint
+    answers **200 with a plain-text onboard blob for a phantom project
+    named "sizing"** rather than 404. Reported as a transport failure it
+    reads as "the server is down" while the server is plainly answering,
+    and re-running never clears it.
+    """
+    url = (f"{base_url.rstrip('/')}/onboard/sizing"
+           f"?budget_tokens={quote_plus(budget_tokens)}")
+    try:
+        with urllib.request.urlopen(authed_request(url, token), timeout=30) as resp:
+            body = resp.read().decode("utf-8")
+    except Exception as e:
+        raise SizingUnavailable(f"could not reach {url} ({e})")
+
+    try:
+        data = json.loads(body)
+        return {**data, "recommended_chunks": int(data["recommended_chunks"])}
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        raise SizingUnavailable(
+            f"{url} did not return sizing data — this server predates the "
+            f"endpoint (the request fell through to /onboard/<project>)")
+
+
+def resolve_chunks(base_url: str, token: str, override: int | None,
+                   warn: Callable[[str], None]) -> tuple[int, dict]:
+    """The chunk count to register, plus the sizing report behind it.
+
+    `override` comes from parse_chunk_override. `warn` is called with a
+    single message string when the count had to be guessed; the report is
+    empty in that case. Sizing is requested at the budget the hook will
+    use (see resolve_onboard_budget), not the route's default.
+    """
+    if override is not None:
+        return override, {}
+    try:
+        sizing = fetch_sizing(base_url, token, resolve_onboard_budget())
+    except SizingUnavailable as e:
+        warn(f"warning: {e}; registering {FALLBACK_CHUNKS} chunks.")
+        return FALLBACK_CHUNKS, {}
+    return sizing["recommended_chunks"], sizing
+
+
+def report_shortfall(sizing: dict, n: int, emit: Callable[[str], None]) -> None:
+    """Name whatever will still be truncated at `n` chunks, or say nothing.
+
+    Shared by both installers because a shortfall is not a Claude Code
+    fact — it is a property of the corpus and the registered count, and an
+    installer that resolves the count silently is one that reports garbled
+    context weeks later as someone else's bug.
+
+    Two populations, and the second is easy to miss: `projects` is what
+    the corpus holds, while the *baseline* is what a directory the corpus
+    has never seen receives. The endpoint keeps the baseline out of
+    `projects` so it floors the recommendation without pretending to be
+    one, which means a loop over `projects` alone is silent about exactly
+    the case a fresh install is made of.
+    """
+    if not sizing:
+        return
+    target = sizing["chunk_target_bytes"]
+    projects = sizing.get("projects") or []
+    if projects:
+        biggest = projects[0]
+        emit(f"derived from largest blob: {biggest['project']} "
+             f"({biggest['bytes']} B) / {target} B per chunk")
+    # Compares the server's measured `widest_at_recommended`, not a byte
+    # estimate — the two disagree, and the estimate is the optimistic one.
+    over = [p for p in projects if p.get("widest_at_recommended", 0) > target]
+    if over:
+        emit("")
+        emit(f"warning: {len(over)} project(s) still split over "
+             f"{target} B at {n} chunks and may be truncated:")
+        for p in over[:5]:
+            emit(f"    {p['project']}: {p['bytes']} B, worst slice "
+                 f"{p['widest_at_recommended']} B")
+        emit(f"    Trim the pinned rule set for these projects — "
+             f"{MAX_CHUNKS} hook entries is the chunk route's ceiling.")
+    if not sizing.get("fits_all", True) and not over:
+        emit("")
+        emit(f"warning: the globals every session receives "
+             f"({sizing['baseline_bytes']} B) need "
+             f"{sizing['baseline_needed']} chunks and still split over "
+             f"{target} B at {n}.")
+        emit("    Sessions in a project the corpus has not seen will be "
+             "truncated.")
+
+
+# Every filename an infoguana SessionStart hook has ever been installed
+# under. Ownership is decided by these names, NOT by the absolute path of
+# the checkout currently running the installer: a second checkout — a
+# worktree, a clone, an extracted release tarball — used to look like a
+# stranger's hook to the installer that met it, so it was preserved as
+# foreign and the new entries were appended beside it. The registration
+# then held both, and every session start paid for both.
+HOOK_SCRIPT_NAMES = (
+    "infoguana-onboard-chunk.py",
+    "infoguana-onboard-chunk.sh",   # legacy bash variant
+    "infoguana-first-turn.sh",      # pre-chunking single-shot hook
+)
+
+
+def hook_dir(command: str) -> str | None:
+    """The directory of the infoguana hook `command` runs, or None.
+
+    One extraction answers both questions the installer asks — "is this
+    ours to strip?" and "whose checkout is it?" — because answering them
+    with two different matchers is a silent-deletion bug. A looser
+    ownership test than detection test means a command can be stripped
+    without ever being reported: `is_infoguana_hook` used to be a plain
+    substring scan while detection required the script path to be its own
+    shell token, so `sh -c "exec /other/checkout/.../hook.py 0 16"` was
+    deleted without the user ever being asked. Now the set of commands
+    that get stripped is by construction the set that gets reported.
+    """
+    # Split the way the shell will. Scanning for the script name and
+    # walking back to the previous space instead loses everything before
+    # the space in a quoted path that contains one — which is exactly the
+    # case the quoting is there to handle.
+    try:
+        tokens = shlex.split(command)
+    except ValueError:              # unbalanced quotes in a hand-edit
+        tokens = command.split()
+    for tok in tokens:
+        if Path(tok).name in HOOK_SCRIPT_NAMES:
+            return str(Path(tok).parent)
+    # Fallback for commands where the path is not its own token: a
+    # wrapper (`sh -c`, `nohup`, `timeout`, an env shim), or a value
+    # still carrying its config quoting. Walk back from the script name
+    # to the nearest separator. Less precise than tokenising, which is
+    # why it is second — but it must exist, because these commands are
+    # stripped either way and a directory we cannot name is still a
+    # directory the user should be told about.
+    for name in HOOK_SCRIPT_NAMES:
+        idx = command.find(name)
+        if idx == -1:
+            continue
+        start = idx
+        while start > 0 and command[start - 1] not in " \t\"'":
+            start -= 1
+        return str(Path(command[start:idx + len(name)]).parent)
+    return None
+
+
+def is_infoguana_hook(command: str) -> bool:
+    """True when `command` runs an infoguana hook from any checkout."""
+    return hook_dir(command) is not None
+
+
+def other_install_dirs(commands: Iterable[str], ours: Path) -> set[str]:
+    """Directories, other than ours, that already host a registered hook.
+
+    A non-empty result means the config points at an infoguana somewhere
+    else — a stale checkout, a relocated repo, or a throwaway one — and
+    replacing it is a decision the user has to make rather than a detail
+    the installer settles quietly.
+    """
+    found: set[str] = set()
+    for cmd in commands:
+        parent = hook_dir(cmd)
+        if parent is not None and parent != str(ours):
+            found.add(parent)
+    return found
+
+
+def confirm_replacement(target: Path, others: set[str], ours: Path,
+                        force: bool, prompt: Callable[[str], str] = input,
+                        out: Callable[[str], None] = print) -> bool:
+    """Ask before repointing an existing integration at this checkout.
+
+    Returns True to proceed. An install that finds no other checkout
+    registered never asks — the common upgrade-in-place case stays a
+    single command.
+
+    Refusing by default when there is no TTY is the load-bearing half:
+    installers get run from scripts, CI, and agent sessions, where a
+    y/N prompt nobody sees would otherwise read as consent.
+    """
+    if not others:
+        return True
+    out(f"warning: {target} already registers infoguana hooks from:")
+    for d in sorted(others):
+        out(f"    {d}")
+    out(f"    replacing them with: {ours}")
+    if force:
+        out("  --force given; replacing.")
+        return True
+    if not sys.stdin.isatty():
+        out("error: refusing to replace an existing integration "
+            "non-interactively. Re-run with --force if that is what you want.")
+        return False
+    try:
+        return prompt("  replace them? [y/N] ").strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        # Ctrl-D and Ctrl-C are declines, not crashes. A traceback out of
+        # a confirmation prompt reads as a broken installer, and the next
+        # thing the user reaches for is --force to make it stop.
+        out("")
+        out("error: no answer given; leaving the existing integration alone.")
+        return False
+
+
+def quote(s: str) -> str:
+    """Quote a path/arg for inclusion in a shell command string.
+
+    POSIX and cmd.exe cannot be served by one expression, so branch on the
+    platform rather than trying. Hand-rolled double-quoting got the POSIX
+    half wrong twice over: `$`, backtick and backslash were in neither the
+    trigger set nor the escape step, so a path containing `$` was emitted
+    bare and the shell expanded it away — leaving the hook pointed at a
+    path that does not exist, every slice silently empty — while a
+    backtick inside the double-quoted branch still ran a command
+    substitution at every session start. shlex handles every POSIX case.
+    """
+    if os.name == "nt":
+        return '"' + s + '"' if any(c in s for c in ' \t"') else s
+    return shlex.quote(s)

@@ -80,7 +80,7 @@ def complete_via_chat(plan_id: int) -> dict:
 def graduate(plan_id: int) -> dict:
     """Graduate a completed plan into a feature note via a synthesis chat.
 
-    Plan #279 phase 2: the plan + its linked PRs + any lessons-learned memory
+    The plan + its linked PRs + any lessons-learned memory
     are exactly the material a "this thing was built" doc should contain. This
     route spawns an opus chat seeded with a synthesis prompt — the agent reads
     the plan, traverses outgoing edges, and drafts a feature note for the user

@@ -46,6 +46,7 @@ reporting, here's where they live:
 | Secret | Location | Notes |
 |---|---|---|
 | MCP bearer token | `./data/.mcp_secret` (in the Docker volume); embedded in `~/.claude.json` and `~/.infoguana.env` after installer runs | Auto-generated on first container start, `chmod 600` on POSIX. Rotatable by deleting the file and restarting the container. |
+| MCP bearer token, Codex path | `INFOGUANA_TOKEN` in the shell environment | Codex reads the bearer from its own process environment, so the Codex setup has you source `~/.infoguana.env` from your shell rc. That puts a full read/write credential for the whole corpus in the environment of every shell-descended process — readable via `/proc/<pid>/environ` by anything running as the same user, and captured by tooling that dumps `env`. `~/.codex/config.toml` deliberately stores only the variable *name* (`bearer_token_env_var`), never the secret. |
 | Claude Code CLI credentials | `./claude-config/` (in the Docker volume) | Only present if you ran `docker compose exec infoguana claude /login`. Persists across rebuilds. |
 | GitHub PATs (optional) | `INFOGUANA_GITHUB_READ_TOKEN` / `INFOGUANA_GITHUB_BOT_TOKENS` env vars | Read from `.env` or the host environment. Never committed by default; `.gitignore` excludes `.env`. |
 | User notes (which may contain anything the user chose to capture) | `./data/infoguana.db` (SQLite) | Bind-mounted from the host. Plain SQLite file — encrypt the filesystem if that matters in your threat model. |

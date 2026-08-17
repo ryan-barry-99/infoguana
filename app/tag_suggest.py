@@ -6,7 +6,7 @@ vocabulary by semantic relevance and co-occurrence with what the agent already
 intends to use, then return a ranked list. The agent re-uses what fits and
 mints fresh tags only when the suggestions are genuinely a poor match.
 
-Scoring layers (per plan #165, refined by #315):
+Scoring layers:
 - Semantic neighborhood: top-K most-similar notes vote for their tags weighted
   by (1 - distance). Captures "tags used on notes like this."
 - NPMI co-occurrence: each draft tag boosts candidates that historically

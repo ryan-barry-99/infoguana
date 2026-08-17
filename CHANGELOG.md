@@ -6,6 +6,85 @@ Notable changes to infoguana. Format follows
 This file starts partway through the project's life; changes before the first
 entry below are recorded only in the commit history.
 
+## Unreleased
+
+### Added
+
+- Codex is a supported client alongside Claude Code. `scripts/install-infoguana-codex.py`
+  writes a managed block into `~/.codex/config.toml` registering the MCP server and the
+  SessionStart hooks, reusing the same `~/.infoguana.env` the Claude Code installer
+  creates. Everything outside the marker comments is preserved across re-runs.
+- `scripts/_infoguana_setup.py`, shared installer helpers with atomic writes and
+  `.env` parsing, so a failed install cannot leave a half-written config or a stray
+  temp file behind.
+- `GET /onboard/sizing` reports each project's blob size and the chunk count needed
+  to deliver the largest without a slice exceeding the inline cap. Both installers
+  call it, so the hook count is measured rather than guessed.
+
+### Changed
+
+- The SessionStart hook serves either agent unmodified, adapting only the text that
+  names which built-in memory store to leave alone. Set `INFOGUANA_AGENT=claude|codex`
+  when autodetection guesses wrong.
+- The onboard protocol no longer opens by telling the agent it is Claude Code. Note
+  that the protocol row is seeded once and then owned by the user, so existing
+  installs keep the old wording until edited in the web UI.
+- Chunk boundaries are chosen to avoid splitting a heading from its body or breaking
+  a rule mid-sentence, instead of snapping to evenly-spaced line starts. The slice
+  ceiling rose from 64 to 128.
+- The installers no longer register a fixed 16 hooks; the count comes from
+  `/onboard/sizing`, and `INFOGUANA_HOOK_CHUNKS` is now validated against the
+  route's accepted range where it previously accepted anything.
+- `scripts/init-project-infoguana.py` takes `--agent claude|codex|both`, writing
+  `CLAUDE.md`, `AGENTS.md`, or the pair. Codex reads a different filename, so
+  without this a Codex user had no way to wire up a project.
+- `budget_tokens` on the onboard routes is bounded at 64000 and rejected outside it.
+  Each value minted its own build-cache entry per project, so an unbounded parameter
+  was an unbounded cache.
+
+### Fixed
+
+- A failed context slice is now visible in the session instead of silently absent.
+  The hook injects a short notice naming the failure, so a partial load stops looking
+  identical to a complete one. Only the first slice emits it — an outage fails every
+  slice at once, and one notice per slice cost more context than the brief it replaced.
+- `INFOGUANA_HOOK_DISABLE=1` now suppresses the memory-override slice too, not only
+  the context slices. The web UI's chat seeds its own context and sets this, so it
+  was receiving roughly 1KB of override text on every turn.
+- A server without `/onboard/sizing` is reported as such instead of as unreachable.
+  The request falls through to `/onboard/{project}` and returns 200, so the old
+  message blamed the network on a server that was plainly answering.
+- `scripts/install-infoguana-mcp.py` writes `~/.claude.json` atomically. It holds
+  every project's Claude Code history and MCP config, and a truncating write left it
+  empty if interrupted.
+- Re-running an installer re-applies mode 600 to `~/.infoguana.env` even when the
+  contents need no change, so a file whose permissions drifted stops being reported
+  as fine while holding a readable bearer token.
+- An invalid `INFOGUANA_HOOK_CHUNKS` prints a one-line error from the Codex installer
+  instead of an uncaught traceback.
+- The installers size their hook count at the budget the hook will actually request,
+  not the server's default. A custom `INFOGUANA_ONBOARD_BUDGET` changes how large the
+  blob is, so sizing that ignored it registered too few chunks and truncated most of
+  every slice.
+- A first install is no longer sized as if sessions receive nothing. `/onboard/sizing`
+  enumerated known projects only, so an empty corpus recommended one chunk while every
+  session still got ~12KB of global rules needing nine. Sizing now floors at the blob an
+  unknown project receives.
+- Re-installing from a different checkout no longer doubles the registration. Hook
+  ownership was keyed to the installing checkout's absolute path, so a second copy
+  of the repo saw the first one's entries as a stranger's hooks, kept them, and
+  appended its own beside them.
+- Both installers now confirm before repointing an integration registered from
+  another checkout, and refuse outright when there is no TTY. Pass `--force` to
+  replace it anyway.
+- The Codex installer reports a sizing shortfall instead of discarding it, and both
+  installers now name the globals-only blob when that is what will not fit. A fresh
+  install is exactly the case the projects list is silent about.
+- The undersized-delivery notice no longer evicts the content it warns about. It rides
+  whichever slice has the most room rather than always the first, and is skipped only
+  when adding it would push an otherwise-fitting slice over the cap. A slice already
+  over the cap still carries it, since that is the case losing the most content.
+
 ## v0.1.0 — 2026-08-16
 
 ### Added

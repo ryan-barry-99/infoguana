@@ -1,23 +1,41 @@
 #!/usr/bin/env python3
 """Idempotent installer for infoguana's Claude Code SessionStart hooks.
 
+For Codex, run scripts/install-infoguana-codex.py instead — both agents
+talk to the same server and the same corpus, so installing both is a
+supported setup and lets you switch agents freely.
+
 Does two things:
 
-1. Auto-generates ~/.infoguana.env from the running container's
-   data/.mcp_secret (token) and data/mcp.json (URL). Idempotent — if
-   ~/.infoguana.env already exists, INFOGUANA_URL and INFOGUANA_TOKEN
-   are refreshed in place and other lines are preserved.
+1. Auto-generates ~/.infoguana.env with the server's URL + bearer token
+   (see _infoguana_setup.resolve_credentials for where those come from).
+   Idempotent — if ~/.infoguana.env already exists, INFOGUANA_URL and
+   INFOGUANA_TOKEN are refreshed in place and other lines are preserved.
 
-2. Registers N (default 16) entries of scripts/infoguana-onboard-chunk.py
-   in ~/.claude/settings.json — each pinned to a different chunk index
+2. Registers N entries of scripts/infoguana-onboard-chunk.py in
+   ~/.claude/settings.json — each pinned to a different chunk index
    of the project's onboard blob. Each hook's additionalContext is
    capped at ~2KB inline but the cap is *per-hook*, so all N chunks
    land inline at session start with no truncation.
 
-Re-running is a no-op for unchanged state: existing entries for this
-hook script are stripped (matched by script path) and re-registered
-with the requested count. Changing INFOGUANA_HOOK_CHUNKS removes the
-old entries and registers the new count.
+N is measured, not hardcoded: the installer asks /onboard/sizing for
+the largest project's blob and registers enough chunks to keep every
+slice under the inline cap. Hardcoding is what broke it before — 16 was
+right for a ~22KB blob and silently wrong once the largest reached
+~59KB, at which point each slice ran ~2x over cap and lost its tail
+mid-rule. Set INFOGUANA_HOOK_CHUNKS to override (1..128); the installer
+prints any project that still won't fit.
+
+Re-running is a no-op for unchanged state: existing entries for any
+infoguana hook script are stripped (matched by script *name*, so a moved
+or duplicated checkout's entries are replaced rather than left to
+accumulate alongside) and re-registered with the resolved count. A
+changed count removes the old entries and registers the new ones, so
+re-run this after the corpus grows.
+
+If the config already registers hooks from a different checkout, the
+installer asks before repointing them, and refuses outright when there
+is no TTY — pass --force (or --yes) to replace them unattended.
 
 The hook command is registered as `{sys.executable} {abs_hook_path} i N`
 — absolute paths to both the Python interpreter and the hook script, so
@@ -29,48 +47,58 @@ Usage:
     # then restart Claude Code
 
     INFOGUANA_HOOK_CHUNKS=20 python scripts/install-infoguana-hooks.py
+    python scripts/install-infoguana-hooks.py --force   # unattended
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _infoguana_setup import (  # noqa: E402
+    FALLBACK_CHUNKS,
+    atomic_write,
+    confirm_replacement,
+    ensure_infoguana_env,
+    is_infoguana_hook,
+    other_install_dirs,
+    parse_chunk_override,
+    quote,
+    report_shortfall,
+    resolve_chunks,
+    resolve_credentials,
+)
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 HOOK = REPO_DIR / "scripts" / "infoguana-onboard-chunk.py"
-LEGACY_BASH_HOOK = REPO_DIR / "scripts" / "infoguana-onboard-chunk.sh"
-LEGACY_FIRST_TURN = REPO_DIR / "scripts" / "infoguana-first-turn.sh"
 SETTINGS = Path.home() / ".claude" / "settings.json"
-MCP_SECRET_FILE = REPO_DIR / "data" / ".mcp_secret"
-MCP_JSON_FILE = REPO_DIR / "data" / "mcp.json"
-ENV_FILE = Path.home() / ".infoguana.env"
 
-
-def _quote(s: str) -> str:
-    """Quote a path/arg for inclusion in a shell command string. Handles
-    both POSIX sh and Windows cmd.exe — both treat double-quoted strings
-    as a single argument."""
-    if any(c in s for c in (" ", "\t", '"', "'", "(", ")", "&", "|", ";")):
-        return '"' + s.replace('"', r"\"") + '"'
-    return s
 
 
 def _build_command(index: int, total: int) -> str:
     return (
-        f"{_quote(sys.executable)} {_quote(str(HOOK))} {index} {total}"
+        f"{quote(sys.executable)} {quote(str(HOOK))} {index} {total}"
     )
 
 
-def _strip_existing(entries: list[dict], match_substrings: list[str]) -> list[dict]:
-    """Drop any inner hook whose command contains any of the match
-    substrings. Preserve the entry wrapper if other hooks remain."""
+def _strip_existing(entries: list[dict]) -> list[dict]:
+    """Drop any inner hook that runs an infoguana hook script, from any
+    checkout. Preserve the entry wrapper if other hooks remain.
+
+    Matching by script name rather than by this checkout's absolute path
+    is what makes a re-install idempotent across a moved or duplicated
+    repo: path-matching left the old entries in place and appended a full
+    second set beside them.
+    """
     out: list[dict] = []
     for entry in entries:
         kept = [
             h for h in entry.get("hooks", [])
-            if not any(sub in (h.get("command") or "") for sub in match_substrings)
+            if not is_infoguana_hook(h.get("command") or "")
         ]
         if kept:
             new_entry = dict(entry)
@@ -79,74 +107,33 @@ def _strip_existing(entries: list[dict], match_substrings: list[str]) -> list[di
     return out
 
 
-def _base_url_from_mcp_json() -> str:
-    """Pull the http URL from data/mcp.json and strip the /mcp/ path
-    suffix to get the server's base URL (used for /onboard/* requests).
-    Honors INFOGUANA_PUBLIC_HOST overrides the user passed at container
-    start time, since the entrypoint baked them into mcp.json."""
-    mcp = json.loads(MCP_JSON_FILE.read_text())
-    full_url = mcp["mcpServers"]["infoguana"]["url"]  # e.g. http://host:8789/mcp/
-    parsed = urlparse(full_url)
-    # Strip path entirely — onboard endpoints live at /onboard, not /mcp/onboard.
-    return urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
-
-
-def _ensure_infoguana_env(token: str, base_url: str) -> str:
-    """Create or update ~/.infoguana.env so the SessionStart hooks can
-    reach the server. Preserves any other lines the user added (other
-    env vars, comments). Returns a short status string for the log."""
-    desired = {"INFOGUANA_URL": base_url, "INFOGUANA_TOKEN": token}
-    preserved: list[str] = []
-    existing: dict[str, str] = {}
-
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text().splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                preserved.append(line)
-                continue
-            key, _, value = stripped.partition("=")
-            key = key.strip()
-            if key in desired:
-                existing[key] = value.strip()
-                continue
-            preserved.append(line)
-
-    if all(existing.get(k) == v for k, v in desired.items()) and ENV_FILE.exists():
-        return f"~/.infoguana.env already up-to-date ({ENV_FILE})"
-
-    lines = preserved + [f"{k}={v}" for k, v in desired.items()]
-    ENV_FILE.write_text("\n".join(lines).rstrip() + "\n")
-    try:
-        ENV_FILE.chmod(0o600)  # POSIX only; no-op on Windows
-    except OSError:
-        pass
-
-    if not existing:
-        return f"created ~/.infoguana.env at {ENV_FILE}"
-    return f"refreshed ~/.infoguana.env at {ENV_FILE}"
+def _registered_commands(hooks: dict) -> list[str]:
+    """Every hook command currently registered, across all events."""
+    return [h.get("command") or ""
+            for event in hooks.values() if isinstance(event, list)
+            for entry in event
+            for h in entry.get("hooks", [])]
 
 
 def main() -> int:
+    force = "--force" in sys.argv or "--yes" in sys.argv
     if not HOOK.is_file():
         print(f"error: hook script not found at {HOOK}", file=sys.stderr)
         return 1
-    if not MCP_SECRET_FILE.is_file() or not MCP_JSON_FILE.is_file():
-        print(f"error: {MCP_SECRET_FILE.name} and/or {MCP_JSON_FILE.name} not found in {REPO_DIR / 'data'}.",
-              file=sys.stderr)
-        print("hint:  is the container running? (docker compose up -d --build)",
-              file=sys.stderr)
+
+    # Validated before any credential or network work, so a typo fails
+    # immediately instead of after a server round-trip.
+    try:
+        override = parse_chunk_override(os.environ.get("INFOGUANA_HOOK_CHUNKS"))
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
 
     try:
-        n = int(os.environ.get("INFOGUANA_HOOK_CHUNKS", "16"))
-    except ValueError:
-        print("error: INFOGUANA_HOOK_CHUNKS must be an integer", file=sys.stderr)
+        token, base_url = resolve_credentials(REPO_DIR)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
-
-    try:
-        token = MCP_SECRET_FILE.read_text().strip()
-        base_url = _base_url_from_mcp_json()
     except PermissionError as e:
         # Old containers (pre-PUID/PGID entrypoint) wrote secret files as
         # root with chmod 600. The current entrypoint chowns to the host
@@ -159,8 +146,6 @@ def main() -> int:
         print(f"           sudo chown -R $USER:$USER {REPO_DIR / 'data'}",
               file=sys.stderr)
         return 1
-    env_status = _ensure_infoguana_env(token, base_url)
-
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     if not SETTINGS.exists():
         SETTINGS.write_text("{}")
@@ -169,16 +154,28 @@ def main() -> int:
     data = json.loads(raw)
     hooks = data.setdefault("hooks", {})
 
-    # Match by script path so any old entries (including the legacy bash
-    # variant) get cleaned up on upgrade.
-    match_substrings = [
-        str(HOOK),
-        str(LEGACY_BASH_HOOK),
-        str(LEGACY_FIRST_TURN),
-    ]
+    # An integration already pointing at a different checkout is replaced
+    # only with the user's say-so — it may be the one they actually use.
+    #
+    # Asked *before* ensure_infoguana_env, and the order is load-bearing:
+    # ~/.infoguana.env lives in $HOME and is shared by every checkout, so
+    # writing it first meant a refused install had already repointed the
+    # other checkout's still-registered hooks at this server with this
+    # bearer. That is the same takeover the guard exists to prevent, just
+    # via the credential instead of the registration — and the installer
+    # said it had refused while it happened.
+    others = other_install_dirs(_registered_commands(hooks), HOOK.parent)
+    if not confirm_replacement(SETTINGS, others, HOOK.parent, force):
+        return 1
+
+    env_status = ensure_infoguana_env(token, base_url)
+
+    n, sizing = resolve_chunks(base_url, token, override,
+                               lambda m: print(m, file=sys.stderr))
+
     for event in ("SessionStart", "UserPromptSubmit"):
         if event in hooks:
-            hooks[event] = _strip_existing(hooks[event], match_substrings)
+            hooks[event] = _strip_existing(hooks[event])
 
     ss = hooks.setdefault("SessionStart", [])
     for i in range(n):
@@ -188,11 +185,30 @@ def main() -> int:
                 "command": _build_command(i, n),
             }]
         })
+    # One more entry for the memory-system override. It gets its own hook
+    # rather than being folded into a slice so it can't push that slice
+    # over the inline cap, and so the sizing search doesn't have to model
+    # a client-side addition it never sees. Matched by the same script
+    # path as the chunk hooks, so re-running still strips it cleanly.
+    ss.append({
+        "hooks": [{
+            "type": "command",
+            "command": f"{quote(sys.executable)} {quote(str(HOOK))} --override",
+        }]
+    })
 
-    SETTINGS.write_text(json.dumps(data, indent=2) + "\n")
+    # Atomic: this file holds the user's permissions allowlist, env vars
+    # and statusline config, none of which this project can regenerate.
+    # A truncated write also breaks the *next* run, since json.loads on
+    # the remains raises before any of our error handling is reached.
+    atomic_write(SETTINGS, json.dumps(data, indent=2) + "\n")
     print(env_status)
     print(f"registered {n} SessionStart hooks in {SETTINGS}")
     print(f"command template: {_build_command(0, n)}")
+    if sizing:
+        report_shortfall(sizing, n, print)
+    elif override is None:
+        print(f"note: count is the {FALLBACK_CHUNKS}-chunk fallback, not measured")
     print()
     print("All set. Open a new Claude Code session in any project — its first")
     print(f"system context will carry {n} inline chunks (~{n}x ~1.7KB ≈ {n*17//10}KB)")

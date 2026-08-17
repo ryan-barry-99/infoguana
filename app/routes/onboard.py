@@ -1,8 +1,8 @@
 """SessionStart onboarding endpoints.
 
-Per note #374: Claude Code caps each `additionalContext` hook output at
-~2KB inline, but the cap is *per-hook* — register N hooks and each gets
-its own ~2KB inline window with no truncation. We exploit that here:
+Claude Code caps each `additionalContext` hook output at ~2KB inline, but
+the cap is *per-hook* — register N hooks and each gets its own ~2KB inline
+window with no truncation. We exploit that here:
 `/onboard/<project>/chunk/<i>?of=<n>` slices the full onboard blob into
 N line-aligned pieces; the installer wires up N hook entries that each
 fetch one slice. All N slices land inline; the agent sees the full
@@ -11,20 +11,63 @@ fetch one slice. All N slices land inline; the agent sees the full
 `/onboard/<project>` (no chunking) is preserved for non-hook callers
 (web UI / debugging)."""
 import hmac
+import logging
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from app import onboard
+from app import db, onboard
 from app.config import settings
 
 
 router = APIRouter(tags=["onboard"])
+log = logging.getLogger(__name__)
 
 
 # Target inline-safe chunk size. The harness's additionalContext cap is
 # empirically ~2KB inline; we leave headroom for the JSON wrapper and any
 # unicode-multibyte characters in note content.
 CHUNK_TARGET_BYTES = 1700
+
+# Stand-in project for "a directory the corpus has never seen". Its blob is
+# the globals-only floor every session is guaranteed to receive, so sizing
+# measures it alongside the real projects. Deliberately a name no real
+# project can collide with — a collision would silently size against
+# someone's actual notes instead of the floor.
+_BASELINE_PROJECT = "\x00baseline-unknown-project"
+
+# Upper bound on hook entries the chunk route will serve. Not a harness
+# limit — a sanity bound on how many subprocesses a session start should
+# spawn. Raised 64 -> 128 once sizing recommended 71 across the corpus at
+# budget_tokens=16000: the old value had drifted from "far above anything
+# real" to "just above the requirement", which is how a sanity bound turns
+# into silent truncation. Note which quantity that is — the cross-project
+# `recommended_chunks`, since one hook count serves every project, not the
+# largest project's own `needed` (55 at the same budget). Blob size scales
+# with the budget, so every figure in this module names the budget it was
+# measured at — the same corpus needs only 17 chunks at the 4000 default.
+# A surplus entry is a no-op (empty slice, hook emits nothing), so the
+# cost of headroom is one wasted subprocess; the cost of shortfall is
+# lost rules. Re-derive with the installer as the corpus grows.
+MAX_CHUNKS = 128
+
+# Bound on `budget_tokens`. Each distinct value mints its own build-cache
+# key for every project, so an unbounded parameter is an unbounded key
+# space — and /onboard/sizing builds one blob per project per request.
+# The ceiling is far above any real onboard budget; it exists so the
+# cache cannot be grown by a caller varying the number.
+MAX_BUDGET_TOKENS = 64000
+
+
+def _check_budget(budget_tokens: int) -> None:
+    """Reject a budget outside the sane range, before any build.
+
+    Placed ahead of the DB work it precedes so it stays reachable
+    without a fixture, and so a bad value costs nothing to refuse.
+    """
+    if budget_tokens <= 0 or budget_tokens > MAX_BUDGET_TOKENS:
+        raise HTTPException(
+            400, f"budget_tokens must be 1..{MAX_BUDGET_TOKENS}")
 
 
 def _bearer_auth(authorization: str = Header(default="")) -> None:
@@ -33,34 +76,226 @@ def _bearer_auth(authorization: str = Header(default="")) -> None:
         raise HTTPException(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
 
 
+def _break_candidates(text: str) -> tuple[list[int], set[int]]:
+    """Line-start offsets where a split won't sever a markdown unit, plus
+    the subset that are also paragraph boundaries (preceded by a blank
+    line) and therefore preferable.
+
+    Two placements produce broken output and are excluded:
+
+    - **Directly after a heading.** The heading lands at the tail of one
+      slice and its body at the head of the next. Since the harness
+      assembles slices as independent blocks and not necessarily in
+      registration order, the reader sees an empty section and its
+      content detached somewhere else. That is exactly how a
+      session came to report "a `## skills available`
+      heading ... which came through empty" alongside "a separate skills
+      preamble further down" — one heading, orphaned, read as two things.
+    - **Inside a fenced code block.** Splitting between ``` fences leaves
+      an unterminated fence in one slice and a stray closer in the other,
+      so following prose renders as code.
+    """
+    safe: list[int] = []
+    paragraph: set[int] = set()
+    in_fence = False
+    prev_meaningful = ""
+    prev_blank = False
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if not in_fence and not prev_meaningful.startswith("#"):
+            safe.append(pos)
+            if prev_blank:
+                paragraph.add(pos)
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+        if stripped:
+            prev_meaningful = stripped
+        prev_blank = not stripped
+        pos += len(line)
+    return safe, paragraph
+
+
 def _line_aligned_chunks(text: str, n: int) -> list[str]:
-    """Split `text` into exactly `n` line-aligned chunks by computing
-    n+1 evenly-spaced offsets and snapping each interior offset back to
-    the start of its containing line. Yields chunks of comparable size
-    with no tail-end accumulation — the previous close-when-over-target
-    approach produced ~n+1 chunks and ballooned the last slot by
-    ~2x when surplus was merged. Empty input yields n empty strings;
+    """Split `text` into exactly `n` chunks, breaking only at offsets that
+    keep markdown units intact (see `_break_candidates`).
+
+    Boundaries start as n+1 evenly-spaced offsets, then each interior one
+    snaps *backward* to the best available break: a paragraph boundary if
+    one is in reach, otherwise any safe line start, otherwise the raw
+    line start it sits in. Even spacing avoids tail-end accumulation —
+    the previous close-when-over-target approach produced ~n+1 chunks and
+    ballooned the last slot ~2x when surplus was merged.
+
+    Snapping backward pushes bytes forward into the following slice, so a
+    slice can exceed total/n; `_chunks_fitting` measures the real split
+    rather than assuming the average. Empty input yields n empty strings;
     very short blobs may produce empty leading/trailing chunks (the
-    agent's hook emits nothing for those — a no-op). Pathological case
-    (a single line longer than total/n) puts that whole line in one
-    chunk that may spill, but the others still land inline. Operates
-    on character offsets, which equals byte offsets for ASCII content
-    (the onboard blob is mostly ASCII)."""
+    agent's hook emits nothing for those — a no-op). Operates on
+    character offsets, which equals byte offsets for ASCII content (the
+    onboard blob is mostly ASCII)."""
     if n <= 0:
         return []
     if not text:
         return [""] * n
     total = len(text)
-    boundaries = [(i * total) // n for i in range(n + 1)]
+    safe, paragraph = _break_candidates(text)
+
+    def _snap(ideal: int) -> int:
+        # Nearest safe break at or before `ideal`; prefer a paragraph
+        # boundary when one sits within the same slice's worth of text,
+        # so sections stay whole rather than merely lines.
+        window = max(1, total // n)
+        best_line = 0
+        best_para = -1
+        for off in safe:
+            if off > ideal:
+                break
+            best_line = off
+            if off in paragraph:
+                best_para = off
+        if best_para >= 0 and ideal - best_para <= window:
+            return best_para
+        if best_line:
+            return best_line
+        nl = text.rfind("\n", 0, ideal)
+        return nl + 1 if nl != -1 else 0
+
     snapped = [0]
-    for b in boundaries[1:-1]:
-        nl = text.rfind("\n", 0, b)
-        snapped.append(nl + 1 if nl != -1 else 0)
+    for i in range(1, n):
+        snapped.append(_snap((i * total) // n))
     snapped.append(total)
     for i in range(1, len(snapped)):
         if snapped[i] < snapped[i - 1]:
             snapped[i] = snapped[i - 1]
     return [text[snapped[i]:snapped[i + 1]] for i in range(n)]
+
+
+def chunks_needed(blob: str) -> int:
+    """Smallest chunk count (1..MAX_CHUNKS) at which no line-aligned slice of
+    `blob` exceeds CHUNK_TARGET_BYTES.
+
+    Measures the real split rather than predicting it from the total.
+    `ceil(total / target)` bounds only the *average* slice: interior
+    boundaries snap backward to a line start, which pushes those bytes
+    forward into the following slice, so one long line can push a single
+    slice past the even split by its own length. Concretely, one 77,679 B
+    blob (budget_tokens=16000) at the ceil-derived 46 still produced a
+    2,288 B worst slice against a ~2,048 B cap — the average was fine and
+    one slice was over anyway.
+
+    Returns MAX_CHUNKS (the route's ceiling) if even that can't satisfy the
+    target; callers report the shortfall rather than silently accepting
+    over-cap slices.
+    """
+    return _chunks_fitting([blob])
+
+
+def _widest_slice(blob: str, n: int) -> int:
+    """Byte length of the largest of `n` line-aligned slices of `blob`."""
+    return max(
+        (len(s.encode("utf-8")) for s in _line_aligned_chunks(blob, n)),
+        default=0,
+    )
+
+
+def _chunks_fitting(blobs: list[str]) -> int:
+    """Smallest chunk count (1..MAX_CHUNKS) at which *every* blob in `blobs` splits
+    with no slice over CHUNK_TARGET_BYTES.
+
+    One hook count serves every project, so the count has to be validated
+    against all of them together. Taking each project's own minimum and
+    then the max across projects is not equivalent and not safe: whether a
+    slice fits depends on where line boundaries happen to fall, so the
+    property is NOT monotonic in n. One real blob (budget_tokens=16000)
+    fits at n=49 and then *regresses* to an 1,845 B worst slice at n=62 —
+    a count derived as "the largest per-project minimum" therefore
+    silently broke a project that had already been fine at a smaller
+    count.
+
+    Returns MAX_CHUNKS if even the ceiling can't satisfy every blob; callers
+    report the shortfall rather than accept over-cap slices quietly.
+    """
+    real = [b for b in blobs if b]
+    if not real:
+        return 1
+    floor = max(
+        1,
+        max(-(-len(b.encode("utf-8")) // CHUNK_TARGET_BYTES) for b in real),
+    )
+    for n in range(floor, MAX_CHUNKS + 1):
+        if all(_widest_slice(b, n) <= CHUNK_TARGET_BYTES for b in real):
+            return n
+    return MAX_CHUNKS
+
+
+@router.get("/onboard/sizing", dependencies=[Depends(_bearer_auth)])
+def onboard_sizing(budget_tokens: int = 4000) -> dict:
+    """Per-project onboard blob sizes plus the chunk count needed to
+    deliver the largest one without any slice exceeding the inline cap.
+
+    Called by both installers at install time — install-infoguana-hooks.py
+    and install-infoguana-codex.py, which share the resolution. Blobs
+    are built through `build_cached`, so the 25-odd projects cost one
+    pass and re-serve from cache.
+
+    Each project reports its own `needed` count (measured, see
+    chunks_needed) alongside `bytes`; `recommended_chunks` is the max
+    across all of them, since one hook count serves every project. The
+    installer prints any project whose `needed` exceeds what it can
+    register, so an undersized split is visible at install time rather
+    than inferred from garbled context weeks later.
+
+    The known projects are not the whole answer. A session opened in a
+    directory the corpus has never seen still receives the global rules
+    and the protocol — on an empty corpus that is ~12 KB needing 9
+    chunks at budget_tokens=4000, while enumerating projects alone
+    recommends 1. Measure it by booting a server on an empty database,
+    not by calling `init_db()` and building: `init_db()` seeds the rules
+    but not the protocol row, which startup writes and which is over a
+    third of the blob, so the in-process shortcut reads ~7.5 KB / 7 and
+    understates a state no install is ever in. Sizing from
+    the known projects only is therefore exactly wrong at the moment it
+    matters most: a first install, where every session is an unknown
+    project. The baseline below is that session's blob, and it floors the
+    recommendation without appearing as a project in the report.
+    """
+    _check_budget(budget_tokens)
+    blobs: dict[str, str] = {
+        name: onboard.build_cached(project=name, budget_tokens=budget_tokens)
+        for name in db.list_project_names()
+    }
+    baseline = onboard.build_cached(project=_BASELINE_PROJECT,
+                                    budget_tokens=budget_tokens)
+    recommended = _chunks_fitting([*blobs.values(), baseline])
+    sizes = [
+        {
+            "project": name,
+            "bytes": len(blob.encode("utf-8")),
+            "needed": chunks_needed(blob),
+            # Worst slice this project actually gets at the recommended
+            # count — the number that decides whether it fits, since the
+            # installed count is global and each project's own minimum
+            # says nothing about how it splits at someone else's.
+            "widest_at_recommended": _widest_slice(blob, recommended),
+        }
+        for name, blob in blobs.items()
+    ]
+    sizes.sort(key=lambda s: -s["widest_at_recommended"])
+    return {
+        "chunk_target_bytes": CHUNK_TARGET_BYTES,
+        "budget_tokens": budget_tokens,
+        "max_bytes": max((s["bytes"] for s in sizes), default=0),
+        "recommended_chunks": recommended,
+        # A project with no notes of its own still gets the globals, so
+        # the baseline is part of "does this fit", not a separate case.
+        "baseline_bytes": len(baseline.encode("utf-8")),
+        "baseline_needed": chunks_needed(baseline),
+        "fits_all": all(
+            s["widest_at_recommended"] <= CHUNK_TARGET_BYTES for s in sizes
+        ) and _widest_slice(baseline, recommended) <= CHUNK_TARGET_BYTES,
+        "projects": sizes,
+    }
 
 
 @router.get("/onboard/{project}/chunk/{index}", response_class=PlainTextResponse,
@@ -75,14 +310,77 @@ def onboard_chunk(project: str, index: int, of: int = 16,
     the agent's context as one combined blob. Hooks fire in registration
     order, and line-aligned slicing keeps splits at line boundaries, so
     the stitched output reads naturally even though the harness joins it
-    from N independent hook responses."""
-    if of <= 0 or of > 64:
-        raise HTTPException(400, "of must be 1..64")
+    from N independent hook responses.
+
+    An over-cap split does not fail — the harness truncates each slice, so
+    content vanishes mid-line with nothing saying so. That is how a
+    16-chunk split kept serving a blob that had grown to need 35, dropping
+    roughly the back half of every slice for weeks. When it happens now,
+    the mechanism detail goes to the server log (operators can act on it)
+    and the agent gets one sentence saying its brief may be short and how
+    to fetch the rest.
+
+    Chunking is transport and stays out of the agent's view: no chunk
+    indices, no counts, no installer commands in anything returned here.
+    Agent-visible text that describes the delivery mechanism is noise the
+    agent cannot act on, and it invites reasoning about slices instead of
+    about memory."""
+    _check_budget(budget_tokens)
+    if of <= 0 or of > MAX_CHUNKS:
+        raise HTTPException(400, f"of must be 1..{MAX_CHUNKS}")
     if index < 0 or index >= of:
         raise HTTPException(400, f"index must be 0..{of - 1}")
     blob = onboard.build_cached(project=project, budget_tokens=budget_tokens)
     chunks = _line_aligned_chunks(blob, of)
     body = chunks[index]
+    # Measure the split actually being served, not the smallest count that
+    # would work. Fit is not monotonic in n (see _chunks_fitting):
+    # boundaries snap backward to a line start, so a blob that fits at 35
+    # can regress at 36, and `needed <= of` therefore does not mean this
+    # split fits. At budget_tokens=16000 every project in the current
+    # corpus has some `of` at or above its own `needed` at which slices run
+    # 1.7-2.4 KB against the cap — which is to say the old guard was silent
+    # for all of them.
+    sizes = [len(c.encode("utf-8")) for c in chunks]
+    widest = max(sizes, default=0)
+    if widest > CHUNK_TARGET_BYTES:
+        if index == 0:
+            # Logged once per delivery, not once per slice: the operator
+            # needs the fact, not `of` copies of it.
+            log.warning(
+                "onboard delivery undersized for %s: %d chunks registered, "
+                "%d needed for %d B — widest slice is %d B against a %d B "
+                "cap, so slices are being truncated. Re-run "
+                "scripts/install-infoguana-hooks.py to re-derive the count.",
+                project, of, chunks_needed(blob),
+                len(blob.encode("utf-8")), widest, CHUNK_TARGET_BYTES,
+            )
+        # The notice has to pay for its own bytes. Prepending it to slice 0
+        # unconditionally is how a warning that content may be missing
+        # *causes* content to go missing: chunk 0 is frequently under the
+        # cap on its own but not by the notice's length, and its tail is
+        # where DEFAULT_PROTOCOL lives. Carry it on whichever slice has the
+        # most headroom.
+        carrier = min(range(of), key=lambda i: sizes[i])
+        if index == carrier:
+            notice = (
+                "_Some of this project's memory may be missing from this "
+                "brief. Call `context(project=...)` for the full set before "
+                "relying on rules or plans._\n\n"
+            )
+            # Two regimes, and the eviction argument only covers one. When
+            # the carrier is under the cap, prepending the notice can push
+            # it over and evict real content, so it has to fit. When the
+            # carrier is *already* over the cap the harness is truncating
+            # its tail regardless — the notice costs 144 B of a tail that
+            # is being cut anyway and buys the agent the one thing it can
+            # act on. Dropping it there is backwards: a badly undersized
+            # split is exactly the case that loses the most, and it was
+            # the case that warned least.
+            if (sizes[carrier] > CHUNK_TARGET_BYTES
+                    or sizes[carrier] + len(notice.encode("utf-8"))
+                    <= CHUNK_TARGET_BYTES):
+                body = notice + body
     if not body:
         return ""
     return body if body.endswith("\n") else body + "\n"
@@ -93,4 +391,5 @@ def onboard_chunk(project: str, index: int, of: int = 16,
 def onboard_project(project: str, budget_tokens: int = 4000) -> str:
     """Full onboard blob (no chunking). Preserved for web UI / debugging.
     Hook callers should use /onboard/<project>/chunk/<i>?of=<n>."""
+    _check_budget(budget_tokens)
     return onboard.build(project=project, budget_tokens=budget_tokens)

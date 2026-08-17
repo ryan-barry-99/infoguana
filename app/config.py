@@ -58,7 +58,13 @@ class Settings(BaseSettings):
     # validator below splits the colon-separated string itself. Without
     # NoDecode, the env-var source would crash on `json.loads("/root/code")`
     # before the validator gets a chance to run.
-    fs_allowlist: Annotated[list[Path], NoDecode] = [Path("/root/code")]
+    #
+    # Empty by default, which disables the read/list/grep tools entirely: an
+    # empty allowlist has no root for a path to resolve under, so every call
+    # is refused. The alternative — shipping a default root — would mean a
+    # fresh install exposes one operator's layout to any MCP caller holding
+    # the bearer token, without that ever being an explicit decision.
+    fs_allowlist: Annotated[list[Path], NoDecode] = []
     fs_read_max_bytes: int = 500 * 1024  # 500 KiB hard cap per read
 
     @field_validator("fs_allowlist", mode="before")
@@ -67,6 +73,23 @@ class Settings(BaseSettings):
         # Accept colon-separated string from env, list from code/JSON.
         if isinstance(v, str):
             return [Path(p) for p in v.split(":") if p.strip()]
+        return v
+
+    # Extra Host/Origin values permitted to reach the MCP endpoint, beyond
+    # loopback — comma-separated, ':*' wildcards the port. Set this when
+    # clients reach the server by LAN or tailnet IP rather than localhost.
+    # Leaving it unset keeps the SDK default (no DNS-rebinding checks);
+    # setting it turns rebinding protection on with loopback + these hosts.
+    #
+    #   INFOGUANA_MCP_ALLOWED_HOSTS=10.0.0.5:*,infoguana.tailnet.ts.net
+    mcp_allowed_hosts: Annotated[list[str], NoDecode] = []
+
+    @field_validator("mcp_allowed_hosts", mode="before")
+    @classmethod
+    def _split_mcp_allowed_hosts(cls, v):
+        # Comma-separated from env (':' is taken by host:port), list from code.
+        if isinstance(v, str):
+            return [h.strip() for h in v.split(",") if h.strip()]
         return v
 
     model_config = SettingsConfigDict(

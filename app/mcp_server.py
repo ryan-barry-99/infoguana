@@ -7,13 +7,37 @@ import logging
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app import classify, db, duedate, embed, export, fs_access, graph, inference, pipeline, plans, skills, tag_suggest
 from app import github as gh
+from app.config import settings
 from app.models import NoteCreate, NoteType, NoteUpdate
 
 
 log = logging.getLogger(__name__)
+
+
+LOOPBACK_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+
+
+def _transport_security() -> TransportSecuritySettings | None:
+    """Build DNS-rebinding protection from `mcp_allowed_hosts`.
+
+    Bearer auth (BearerAuthMiddleware in main.py) is the real gate; this is
+    defense in depth. Returns None when no extra hosts are configured, which
+    leaves the SDK's default of no Host/Origin checks — passing a settings
+    object with only loopback would lock out clients connecting by LAN or
+    tailnet IP, which is the common deployment.
+    """
+    if not settings.mcp_allowed_hosts:
+        return None
+    hosts = LOOPBACK_HOSTS + settings.mcp_allowed_hosts
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[f"http://{h}" for h in hosts],
+    )
 
 
 mcp = FastMCP(
@@ -34,6 +58,7 @@ mcp = FastMCP(
         "in one sentence; speculative links pollute the graph."
     ),
     streamable_http_path="/",
+    transport_security=_transport_security(),
 )
 
 
@@ -1433,8 +1458,9 @@ def infoguana_export(start_id: int,
 # ---------------------------------------------------------------------------
 # Read-only filesystem access.
 #
-# Scoped by an allowlist (INFOGUANA_FS_ALLOWLIST, default /root/code) with a
-# hardcoded denylist for secrets, SSH/GPG keys, `.git/`, and `*.sqlite`.
+# Scoped by an allowlist (INFOGUANA_FS_ALLOWLIST, empty by default, which
+# turns these three tools off) with a hardcoded denylist for secrets,
+# SSH/GPG keys, `.git/`, and `*.sqlite`.
 # Binary files are refused outright — these tools are for source code.
 # Every call is recorded in the `fs_reads` audit table.
 # ---------------------------------------------------------------------------
@@ -1450,8 +1476,9 @@ def infoguana_read_file(path: str,
     numbers survive in your context. Useful when grounding answers in the
     user's actual code rather than memory content.
 
-    Access is restricted to paths under the configured allowlist (default
-    `/root/code`). Secrets, SSH/GPG keys, `.git/` internals, and `*.sqlite`
+    Access is restricted to paths under the operator-configured allowlist,
+    which is empty by default — if no roots are set, every call is refused
+    with a message saying so. Secrets, SSH/GPG keys, `.git/` internals, and `*.sqlite`
     files are denylisted and refused. Binary files are refused. Files over
     the size cap (default 500 KB) require paginated reads via offset+limit.
 

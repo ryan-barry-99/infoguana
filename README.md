@@ -155,9 +155,10 @@ in a different repo — sees that knowledge surface again.
   (`INFOGUANA_GITHUB_BOT_TOKENS`); refuses if no PAT configured for the
   project
 
-**Filesystem (read-only, allowlisted)**
-- `read_file(path, ...)` / `list_dir(path)` / `grep(pattern, ...)` — scoped
-  to `INFOGUANA_FS_ALLOWLIST`; see [DEPLOY.md](DEPLOY.md) for details
+**Filesystem (read-only, off by default)**
+- `read_file(path, ...)` / `list_dir(path)` / `grep(pattern, ...)` — refused
+  until `INFOGUANA_FS_ALLOWLIST` names the roots they may read under; see
+  [DEPLOY.md](DEPLOY.md) for details
 
 ## Quick start (Docker)
 

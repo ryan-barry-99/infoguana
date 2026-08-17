@@ -40,17 +40,21 @@ INFOGUANA_PUBLIC_HOST=infoguana.example.com docker compose up -d --build
 python scripts/install-infoguana-mcp.py
 ```
 
-## Filesystem read tools (optional)
+## Filesystem read tools (off by default)
 
-Infoguana exposes read-only filesystem tools (`read_file`,
+Infoguana can expose read-only filesystem tools (`read_file`,
 `list_dir`, `grep`) so the chat agent and connected Claude Code
-sessions can ground answers in actual source files. Access is scoped by
-an allowlist:
+sessions can ground answers in actual source files. **They are disabled
+until you name the roots they may read under** — with no allowlist, every
+call is refused with a message saying the feature is off:
 
 ```
 INFOGUANA_FS_ALLOWLIST=/root/code            # colon-separated absolute roots
 INFOGUANA_FS_READ_MAX_BYTES=512000           # per-read cap (default 500 KiB)
 ```
+
+Under Docker these are container paths, so a root only works if it is also
+bind-mounted into the container.
 
 Paths outside the allowlist are refused. A hardcoded denylist (`.env*`,
 SSH/GPG keys, `.git/` internals, `*.sqlite`, cloud creds) applies
@@ -58,6 +62,21 @@ additionally — don't rely on the allowlist alone to keep secrets out.
 Binary files are refused outright; tools are for source code.
 
 Every successful read is recorded in the `fs_reads` table for audit.
+
+## MCP Host/Origin allowlist (optional)
+
+The bearer token is the gate on the MCP endpoint. As defense in depth you
+can also enable the SDK's DNS-rebinding protection, which checks the `Host`
+and `Origin` headers:
+
+```
+INFOGUANA_MCP_ALLOWED_HOSTS=10.0.0.5:*,infoguana.tailnet.ts.net
+```
+
+Comma-separated; `:*` wildcards the port. Loopback is always included, so
+list only the LAN or tailnet names clients actually use. Leave it unset —
+the default — to perform no Host/Origin checks; setting it to a value that
+omits a name your clients use will lock them out.
 
 ## Backups
 

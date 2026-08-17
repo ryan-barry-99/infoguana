@@ -4,7 +4,9 @@ The infoguana runs as root on the host, so the *allowlist* + *denylist* are the
 real trust boundary — not the caller. Every exported helper enforces:
 
   1. `path` resolves (symlinks followed) to a descendant of at least one
-     allowlist root from `settings.fs_allowlist`.
+     allowlist root from `settings.fs_allowlist`. That list is empty by
+     default, so these tools are off until an operator opts in — an empty
+     allowlist refuses everything rather than falling back to a default root.
   2. No path component matches the hardcoded denylist globs (secrets,
      keys, `.git/`, `*.sqlite`, …).
   3. Reads are size-capped (`settings.fs_read_max_bytes`) and binary files
@@ -45,8 +47,9 @@ _DENY_PATTERNS: tuple[str, ...] = (
     "*.pem", "*.key", "*.pfx", "*.p12",
     # Cloud creds
     ".aws", ".gcloud", ".azure",
-    # Docker auth (has registry tokens)
-    "config.json",  # only matched under .docker/ — full-path filter below
+    # Docker auth (has registry tokens) is handled by _DENY_SUFFIXES, not
+    # here — a bare "config.json" pattern matches every npm/tsconfig-adjacent
+    # project file too, which is why it lives on the full-path filter.
     # VCS internals (hooks, config with tokens)
     ".git",
     # Infoguana's own DB / WAL / SHM — don't let an agent exfiltrate its own store
@@ -135,6 +138,15 @@ def resolve(path: str) -> Path:
     except (OSError, RuntimeError) as e:
         raise FSAccessError(f"could not resolve path: {e}")
 
+    if not settings.fs_allowlist:
+        # Distinguish "off" from "wrong path". Without this the message reads
+        # "outside the configured allowlist ()", which sends the reader looking
+        # for a path bug when the feature is simply not enabled.
+        raise FSAccessError(
+            "filesystem access is disabled: no roots are configured. "
+            "Set INFOGUANA_FS_ALLOWLIST to a colon-separated list of absolute "
+            "directories the server may read under (e.g. /root/code:/root/docs)."
+        )
     if not _under_allowlist(resolved):
         roots = ", ".join(str(r) for r in settings.fs_allowlist)
         raise FSAccessError(

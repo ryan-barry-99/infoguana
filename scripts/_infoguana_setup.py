@@ -379,6 +379,51 @@ def resolve_chunks(base_url: str, token: str, override: int | None,
     return sizing["recommended_chunks"], sizing
 
 
+def report_shortfall(sizing: dict, n: int, emit: Callable[[str], None]) -> None:
+    """Name whatever will still be truncated at `n` chunks, or say nothing.
+
+    Shared by both installers because a shortfall is not a Claude Code
+    fact — it is a property of the corpus and the registered count, and an
+    installer that resolves the count silently is one that reports garbled
+    context weeks later as someone else's bug.
+
+    Two populations, and the second is easy to miss: `projects` is what
+    the corpus holds, while the *baseline* is what a directory the corpus
+    has never seen receives. The endpoint keeps the baseline out of
+    `projects` so it floors the recommendation without pretending to be
+    one, which means a loop over `projects` alone is silent about exactly
+    the case a fresh install is made of.
+    """
+    if not sizing:
+        return
+    target = sizing["chunk_target_bytes"]
+    projects = sizing.get("projects") or []
+    if projects:
+        biggest = projects[0]
+        emit(f"derived from largest blob: {biggest['project']} "
+             f"({biggest['bytes']} B) / {target} B per chunk")
+    # Compares the server's measured `widest_at_recommended`, not a byte
+    # estimate — the two disagree, and the estimate is the optimistic one.
+    over = [p for p in projects if p.get("widest_at_recommended", 0) > target]
+    if over:
+        emit("")
+        emit(f"warning: {len(over)} project(s) still split over "
+             f"{target} B at {n} chunks and may be truncated:")
+        for p in over[:5]:
+            emit(f"    {p['project']}: {p['bytes']} B, worst slice "
+                 f"{p['widest_at_recommended']} B")
+        emit(f"    Trim the pinned rule set for these projects — "
+             f"{MAX_CHUNKS} hook entries is the chunk route's ceiling.")
+    if not sizing.get("fits_all", True) and not over:
+        emit("")
+        emit(f"warning: the globals every session receives "
+             f"({sizing['baseline_bytes']} B) need "
+             f"{sizing['baseline_needed']} chunks and still split over "
+             f"{target} B at {n}.")
+        emit("    Sessions in a project the corpus has not seen will be "
+             "truncated.")
+
+
 # Every filename an infoguana SessionStart hook has ever been installed
 # under. Ownership is decided by these names, NOT by the absolute path of
 # the checkout currently running the installer: a second checkout — a

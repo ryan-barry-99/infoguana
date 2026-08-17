@@ -61,7 +61,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _infoguana_setup import (  # noqa: E402
     FALLBACK_CHUNKS,
-    MAX_CHUNKS,
     atomic_write,
     confirm_replacement,
     ensure_infoguana_env,
@@ -69,6 +68,7 @@ from _infoguana_setup import (  # noqa: E402
     other_install_dirs,
     parse_chunk_override,
     quote,
+    report_shortfall,
     resolve_chunks,
     resolve_credentials,
 )
@@ -206,30 +206,7 @@ def main() -> int:
     print(f"registered {n} SessionStart hooks in {SETTINGS}")
     print(f"command template: {_build_command(0, n)}")
     if sizing:
-        target = sizing["chunk_target_bytes"]
-        biggest = sizing["projects"][0] if sizing["projects"] else None
-        if biggest:
-            print(f"derived from largest blob: {biggest['project']} "
-                  f"({biggest['bytes']} B) / {target} B per chunk")
-        # Name the projects that would still lose content, so a corpus
-        # that has outgrown even the chunk route's ceiling is stated outright
-        # rather than left to show up as garbled context later. Compares
-        # the server's measured `needed`, not a byte estimate — the two
-        # disagree, and the estimate is the optimistic one.
-        over = [
-            p for p in sizing["projects"]
-            if p.get("widest_at_recommended", 0) > target
-        ]
-        if over:
-            print()
-            print(f"warning: {len(over)} project(s) still split over "
-                  f"{target} B at {n} chunks and may be truncated:")
-            for p in over[:5]:
-                print(f"    {p['project']}: {p['bytes']} B, worst slice "
-                      f"{p['widest_at_recommended']} B")
-            print(f"    Trim the pinned rule set for these projects — "
-                  f"{MAX_CHUNKS} hook")
-            print("    entries is the chunk route's ceiling.")
+        report_shortfall(sizing, n, print)
     elif override is None:
         print(f"note: count is the {FALLBACK_CHUNKS}-chunk fallback, not measured")
     print()

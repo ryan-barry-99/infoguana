@@ -38,10 +38,9 @@ entry below are recorded only in the commit history.
 - `scripts/init-project-infoguana.py` takes `--agent claude|codex|both`, writing
   `CLAUDE.md`, `AGENTS.md`, or the pair. Codex reads a different filename, so
   without this a Codex user had no way to wire up a project.
-- Chunk-count resolution moved into `scripts/_infoguana_setup.py`, shared by both
-  installers. `INFOGUANA_HOOK_CHUNKS` is validated before any credential or network
-  work, and its upper bound now tracks the route's own ceiling of 128 rather than a
-  hardcoded 64 that had gone stale.
+- `budget_tokens` on the onboard routes is bounded at 64000 and rejected outside it.
+  Each value minted its own build-cache entry per project, so an unbounded parameter
+  was an unbounded cache.
 
 ### Fixed
 
@@ -78,6 +77,9 @@ entry below are recorded only in the commit history.
 - Both installers now confirm before repointing an integration registered from
   another checkout, and refuse outright when there is no TTY. Pass `--force` to
   replace it anyway.
+- The Codex installer reports a sizing shortfall instead of discarding it, and both
+  installers now name the globals-only blob when that is what will not fit. A fresh
+  install is exactly the case the projects list is silent about.
 - The undersized-delivery notice no longer evicts the content it warns about. It rides
   whichever slice has the most room rather than always the first, and is skipped only
   when adding it would push an otherwise-fitting slice over the cap. A slice already

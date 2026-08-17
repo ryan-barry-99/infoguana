@@ -38,16 +38,36 @@ _BASELINE_PROJECT = "\x00baseline-unknown-project"
 
 # Upper bound on hook entries the chunk route will serve. Not a harness
 # limit — a sanity bound on how many subprocesses a session start should
-# spawn. Raised 64 -> 128 once the largest project needed 74 at
+# spawn. Raised 64 -> 128 once sizing recommended 71 across the corpus at
 # budget_tokens=16000: the old value had drifted from "far above anything
-# real" to "exactly the requirement", which is how a sanity bound turns
-# into silent truncation. Blob size scales with the budget, so every
-# figure in this module names the budget it was measured at — the same
-# corpus needs only 17 chunks at the 4000-token default.
+# real" to "just above the requirement", which is how a sanity bound turns
+# into silent truncation. Note which quantity that is — the cross-project
+# `recommended_chunks`, since one hook count serves every project, not the
+# largest project's own `needed` (55 at the same budget). Blob size scales
+# with the budget, so every figure in this module names the budget it was
+# measured at — the same corpus needs only 17 chunks at the 4000 default.
 # A surplus entry is a no-op (empty slice, hook emits nothing), so the
 # cost of headroom is one wasted subprocess; the cost of shortfall is
 # lost rules. Re-derive with the installer as the corpus grows.
 MAX_CHUNKS = 128
+
+# Bound on `budget_tokens`. Each distinct value mints its own build-cache
+# key for every project, so an unbounded parameter is an unbounded key
+# space — and /onboard/sizing builds one blob per project per request.
+# The ceiling is far above any real onboard budget; it exists so the
+# cache cannot be grown by a caller varying the number.
+MAX_BUDGET_TOKENS = 64000
+
+
+def _check_budget(budget_tokens: int) -> None:
+    """Reject a budget outside the sane range, before any build.
+
+    Placed ahead of the DB work it precedes so it stays reachable
+    without a fixture, and so a bad value costs nothing to refuse.
+    """
+    if budget_tokens <= 0 or budget_tokens > MAX_BUDGET_TOKENS:
+        raise HTTPException(
+            400, f"budget_tokens must be 1..{MAX_BUDGET_TOKENS}")
 
 
 def _bearer_auth(authorization: str = Header(default="")) -> None:
@@ -214,7 +234,8 @@ def onboard_sizing(budget_tokens: int = 4000) -> dict:
     """Per-project onboard blob sizes plus the chunk count needed to
     deliver the largest one without any slice exceeding the inline cap.
 
-    Called by scripts/install-infoguana-hooks.py at install time. Blobs
+    Called by both installers at install time — install-infoguana-hooks.py
+    and install-infoguana-codex.py, which share the resolution. Blobs
     are built through `build_cached`, so the 25-odd projects cost one
     pass and re-serve from cache.
 
@@ -228,12 +249,18 @@ def onboard_sizing(budget_tokens: int = 4000) -> dict:
     The known projects are not the whole answer. A session opened in a
     directory the corpus has never seen still receives the global rules
     and the protocol — on an empty corpus that is ~12 KB needing 9
-    chunks, while enumerating projects alone recommends 1. Sizing from
+    chunks at budget_tokens=4000, while enumerating projects alone
+    recommends 1. Measure it by booting a server on an empty database,
+    not by calling `init_db()` and building: `init_db()` seeds the rules
+    but not the protocol row, which startup writes and which is over a
+    third of the blob, so the in-process shortcut reads ~7.5 KB / 7 and
+    understates a state no install is ever in. Sizing from
     the known projects only is therefore exactly wrong at the moment it
     matters most: a first install, where every session is an unknown
     project. The baseline below is that session's blob, and it floors the
     recommendation without appearing as a project in the report.
     """
+    _check_budget(budget_tokens)
     blobs: dict[str, str] = {
         name: onboard.build_cached(project=name, budget_tokens=budget_tokens)
         for name in db.list_project_names()
@@ -298,6 +325,7 @@ def onboard_chunk(project: str, index: int, of: int = 16,
     Agent-visible text that describes the delivery mechanism is noise the
     agent cannot act on, and it invites reasoning about slices instead of
     about memory."""
+    _check_budget(budget_tokens)
     if of <= 0 or of > MAX_CHUNKS:
         raise HTTPException(400, f"of must be 1..{MAX_CHUNKS}")
     if index < 0 or index >= of:
@@ -363,4 +391,5 @@ def onboard_chunk(project: str, index: int, of: int = 16,
 def onboard_project(project: str, budget_tokens: int = 4000) -> str:
     """Full onboard blob (no chunking). Preserved for web UI / debugging.
     Hook callers should use /onboard/<project>/chunk/<i>?of=<n>."""
+    _check_budget(budget_tokens)
     return onboard.build(project=project, budget_tokens=budget_tokens)

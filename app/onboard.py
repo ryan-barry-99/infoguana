@@ -208,6 +208,15 @@ def build_cached(project: str, budget_tokens: int = 4000) -> str:
         cached = _build_cache.get(key)
         if cached and cached[1] > now:
             return cached[0]
+        # Expiry is checked on read but nothing else removes an entry, so
+        # a miss is the only chance to drop stale ones. That was harmless
+        # while a request inserted one key; /onboard/sizing inserts one
+        # per project, and budget_tokens is caller-controlled, so every
+        # distinct budget mints a fresh key for every project (~0.6 MB
+        # retained per sizing request against a 27-project corpus).
+        # Pruning here bounds the dict at the live working set.
+        for stale in [k for k, v in _build_cache.items() if v[1] <= now]:
+            del _build_cache[stale]
         blob = build(project=project, budget_tokens=budget_tokens)
         _build_cache[key] = (blob, now + _BUILD_CACHE_TTL_SECONDS)
         return blob

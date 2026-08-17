@@ -15,6 +15,7 @@ whose contributors use different agents.
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -29,40 +30,31 @@ AGENT_FILES = {"claude": ["CLAUDE.md"], "codex": ["AGENTS.md"],
 
 
 def main() -> int:
-    argv = sys.argv[1:]
-    agent = "claude"
-    # Both spellings, because `--agent=codex` is standard for long options
-    # and the space-only form swallowed it as the positional target dir —
-    # failing with "target dir does not exist: --agent=codex" while
-    # silently defaulting the agent back to claude.
-    inline = [a for a in argv if a.startswith("--agent=")]
-    if inline:
-        value = inline[0].split("=", 1)[1]
-        if value not in AGENT_FILES:
-            print(f"error: --agent must be one of {', '.join(AGENT_FILES)}",
-                  file=sys.stderr)
-            return 2
-        agent = value
-        argv = [a for a in argv if not a.startswith("--agent=")]
-    elif "--agent" in argv:
-        i = argv.index("--agent")
-        if i + 1 >= len(argv) or argv[i + 1] not in AGENT_FILES:
-            print(f"error: --agent must be one of {', '.join(AGENT_FILES)}",
-                  file=sys.stderr)
-            return 2
-        agent = argv[i + 1]
-        del argv[i:i + 2]
+    # argparse rather than a hand-rolled scan: both `--agent codex` and
+    # `--agent=codex` have to work, and hand-rolling that meant a branch
+    # per spelling, each repeating the same membership check, each
+    # mutating argv before the positionals were read. The space-only
+    # version once swallowed `--agent=codex` as the target dir — failing
+    # with "target dir does not exist: --agent=codex" while silently
+    # defaulting the agent back to claude. `choices` covers both
+    # spellings and the error message for free.
+    parser = argparse.ArgumentParser(
+        prog=Path(sys.argv[0]).name,
+        description="Wire a repo up to the shared infoguana.")
+    parser.add_argument("project",
+                        help="what infoguana keys notes on, usually the "
+                             "cwd basename")
+    parser.add_argument("target_dir", nargs="?", default=None,
+                        metavar="target-dir",
+                        help="directory to write into (default: cwd)")
+    parser.add_argument("--agent", choices=list(AGENT_FILES), default="claude",
+                        help="which instruction file to write "
+                             "(default: %(default)s)")
+    args = parser.parse_args()
 
-    if not argv:
-        print(
-            f"usage: {Path(sys.argv[0]).name} <project-name> [target-dir] "
-            f"[--agent {'|'.join(AGENT_FILES)}]",
-            file=sys.stderr,
-        )
-        return 2
-
-    project = argv[0]
-    target_dir = Path(argv[1]) if len(argv) > 1 else Path.cwd()
+    project = args.project
+    target_dir = Path(args.target_dir) if args.target_dir else Path.cwd()
+    agent = args.agent
 
     if not TEMPLATE.is_file():
         print(f"error: template not found at {TEMPLATE}", file=sys.stderr)

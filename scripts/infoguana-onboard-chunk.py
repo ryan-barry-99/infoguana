@@ -95,8 +95,17 @@ def main() -> int:
     # order. The harness assembles hook outputs in completion order; with
     # server-side caching, the first chunk takes ~300ms (cold) and the
     # rest serve in ~5-10ms. 50ms-per-index stagger dominates that.
+    #
+    # Capped, because the delay is not free: every slice re-slices
+    # whatever the server's build cache holds at the moment it asks, so
+    # cross-slice consistency lasts only as long as that cache entry. An
+    # uncapped ramp reached 6.4s at 128 chunks — close enough to the 10s
+    # TTL that a concurrent write could shift the boundaries mid-delivery
+    # and leave the stitched brief with a lost or duplicated seam. The
+    # cap only compresses the tail, where the ordering nudge has already
+    # done its work.
     if index > 0:
-        time.sleep(index * 0.05)
+        time.sleep(min(index, 16) * 0.05)
 
     _load_env_file(Path.home() / ".infoguana.env")
     url = (os.environ.get("INFOGUANA_URL") or "http://localhost:8789").rstrip("/")

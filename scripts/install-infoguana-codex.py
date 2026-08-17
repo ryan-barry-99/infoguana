@@ -54,6 +54,7 @@ from _infoguana_setup import (  # noqa: E402
     other_install_dirs,
     parse_chunk_override,
     quote,
+    report_shortfall,
     resolve_chunks,
     resolve_credentials,
 )
@@ -404,7 +405,7 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    chunks, _sizing = resolve_chunks(base_url, token, override, _warn)
+    chunks, sizing = resolve_chunks(base_url, token, override, _warn)
     block = render_block(base_url, chunks)
     if args.print_only:
         print(block, end="")
@@ -447,6 +448,8 @@ def main() -> int:
         verb = "updated" if BEGIN in existing else "installed"
         print(f"{verb} infoguana block in {CONFIG}")
     print(env_status)
+    if sizing:
+        report_shortfall(sizing, chunks, print)
     print()
     print("Two manual steps remain.")
     print()

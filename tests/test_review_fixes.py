@@ -258,8 +258,9 @@ def test_the_stamped_template_names_no_claude_only_paths(tmp_path):
 def test_sizing_floors_at_the_unknown_project_blob(route, monkeypatch):
     """A fresh install has no projects, so enumerating them recommends 1
     chunk — while every session still receives the globals and the
-    seeded protocol, ~12 KB needing 9. Sizing was therefore most wrong at
-    a first install, where every session is an unknown project."""
+    seeded protocol, ~12 KB needing 9 at the 4000-token default. Sizing
+    was therefore most wrong at a first install, where every session is
+    an unknown project."""
     monkeypatch.setattr(route.db, "list_project_names", lambda: [])
     big = "".join("y" * 60 + "\n" for _ in range(200))   # ~12 KB, like the globals
     monkeypatch.setattr(route.onboard, "build_cached",
@@ -281,3 +282,163 @@ def test_a_large_project_still_wins_over_the_baseline(route, monkeypatch):
                         small if project == route._BASELINE_PROJECT else big)
     out = route.onboard_sizing(budget_tokens=4000)
     assert out["recommended_chunks"] > out["baseline_needed"]
+
+
+# --- markdown units must survive slicing ---------------------------------
+
+def test_a_heading_is_never_severed_from_its_body(route):
+    """The reason `_break_candidates` exists. A split directly after a
+    heading orphans it: the harness assembles slices as independent
+    blocks, so the reader gets an empty section and its content detached
+    somewhere else — observed once as "a `## skills available` heading
+    which came through empty" beside "a separate skills preamble further
+    down". Pre-fix, splitting snapped to any line start, so the offset
+    right after a heading was a legal break."""
+    blob = "".join(
+        f"## section {i}\n" + "body line for section\n" * 4 + "\n"
+        for i in range(12)
+    )
+    for n in range(2, 13):
+        chunks = route._line_aligned_chunks(blob, n)
+        assert "".join(chunks) == blob
+        for c in chunks:
+            assert not c.rstrip("\n").endswith(f"## section {c.count('#')}") \
+                or c.count("\n") > 1
+        # No slice may end on a heading line — that is the orphaning.
+        for c in chunks:
+            lines = c.rstrip("\n").splitlines()
+            if lines:
+                assert not lines[-1].startswith("## "), f"orphaned at n={n}"
+
+
+def test_a_code_fence_is_never_split_across_slices(route):
+    """An unterminated ``` in one slice and a stray closer in the next
+    renders every following paragraph as code. Pre-fix, fences were
+    invisible to the splitter."""
+    blob = "".join(
+        f"Prose paragraph {i}.\n\n```\ncode line one\ncode line two\n```\n\n"
+        for i in range(10)
+    )
+    for n in range(2, 15):
+        chunks = route._line_aligned_chunks(blob, n)
+        assert "".join(chunks) == blob
+        for c in chunks:
+            assert c.count("```") % 2 == 0, f"unbalanced fence at n={n}"
+
+
+def test_a_paragraph_boundary_is_preferred_when_one_is_in_reach(route):
+    """Sections stay whole rather than merely lines: a blank-line boundary
+    within a slice's worth of text wins over the nearest line start.
+
+    The paragraphs are numbered and multi-line so the assertion can tell
+    a real paragraph start from any old line start — pre-fix, splitting
+    snapped to whichever line boundary was nearest, which lands mid-
+    paragraph for all but a lucky blob.
+
+    The paragraphs are long enough that each evenly-spaced boundary falls
+    well inside one. Short paragraphs make the boundaries land on
+    paragraph starts by arithmetic, and the test then passes against a
+    splitter with no notion of a paragraph at all — which is the thing it
+    is supposed to detect. Against the pre-fix splitter this blob breaks
+    at "continuation line" every time."""
+    blob = "".join(
+        f"Paragraph {i} opens here.\n" + "continuation line\n" * 9 + "\n"
+        for i in range(9)
+    )
+    chunks = route._line_aligned_chunks(blob, 4)
+    assert "".join(chunks) == blob
+    for c in chunks[1:]:
+        assert c.startswith("Paragraph "), "slice began mid-paragraph"
+
+
+# --- the chunk ceiling is a route behavior, not a constant ---------------
+
+def test_the_route_serves_the_full_chunk_ceiling(route, monkeypatch):
+    """The installer registers up to MAX_CHUNKS entries, so the route has
+    to answer at that count. A bound that regressed to 64 would 400 every
+    slice above it and silently drop the tail of every brief — which the
+    source-text drift check in test_chunk_resolution.py cannot see,
+    because it never calls the endpoint.
+
+    The count is written out rather than read from `route.MAX_CHUNKS`: a
+    test that takes its expectation from the constant it is checking
+    follows that constant wherever it goes, which is the drift check
+    again in a costume."""
+    monkeypatch.setattr(route.onboard, "build_cached",
+                        lambda project, budget_tokens: "line\n" * 500)
+    out = route.onboard_chunk(project="p", index=127, of=128)
+    assert isinstance(out, str)
+
+
+def test_the_route_refuses_a_count_above_the_ceiling(route, monkeypatch):
+    """The other half — the bound still has to be a bound. Without this,
+    raising MAX_CHUNKS to silence the test above would pass."""
+    monkeypatch.setattr(route.onboard, "build_cached",
+                        lambda project, budget_tokens: "line\n" * 500)
+    with pytest.raises(route.HTTPException) as e:
+        route.onboard_chunk(project="p", index=0, of=129)
+    assert e.value.status_code == 400
+
+
+# --- budget_tokens bounds the build cache's key space --------------------
+
+def test_an_absurd_budget_is_refused_before_any_build(route, monkeypatch):
+    """Each distinct budget mints its own cache entry per project, and
+    nothing evicts on write, so an unbounded parameter is an unbounded
+    cache. Refused ahead of the DB work, which is also what keeps this
+    testable without a fixture."""
+    called = []
+    monkeypatch.setattr(route.onboard, "build_cached",
+                        lambda project, budget_tokens: called.append(1) or "x")
+    for bad in (0, -1, route.MAX_BUDGET_TOKENS + 1):
+        with pytest.raises(route.HTTPException) as e:
+            route.onboard_chunk(project="p", index=0, of=4, budget_tokens=bad)
+        assert e.value.status_code == 400
+    assert called == [], "a rejected budget still reached the builder"
+
+
+# --- a shortfall must be named, including the one with no project ---------
+
+def _shortfall(setup, sizing, n=9) -> list[str]:
+    out: list[str] = []
+    setup.report_shortfall(sizing, n, out.append)
+    return out
+
+
+def _sizing(projects, *, baseline_needed=7, fits_all=True, target=1700):
+    return {"chunk_target_bytes": target, "projects": projects,
+            "baseline_bytes": 11980, "baseline_needed": baseline_needed,
+            "fits_all": fits_all}
+
+
+def test_a_project_that_will_not_fit_is_named(setup):
+    lines = _shortfall(setup, _sizing(
+        [{"project": "big", "bytes": 90000, "widest_at_recommended": 4200}],
+        fits_all=False))
+    assert any("still split over" in ln for ln in lines)
+    assert any("big" in ln for ln in lines)
+
+
+def test_the_globals_only_blob_is_reported_when_no_project_is_over(setup):
+    """The baseline is deliberately absent from `projects` — it floors the
+    recommendation without being one — so a loop over `projects` alone is
+    silent about a fresh install, which is the case the baseline exists
+    for. Pre-fix that silence was the whole bug: `fits_all` was computed
+    by the endpoint and read by neither installer."""
+    lines = _shortfall(setup, _sizing(
+        [{"project": "small", "bytes": 900, "widest_at_recommended": 200}],
+        fits_all=False))
+    assert any("globals every session receives" in ln for ln in lines)
+    assert any("11980" in ln for ln in lines)
+
+
+def test_a_corpus_that_fits_says_nothing_alarming(setup):
+    lines = _shortfall(setup, _sizing(
+        [{"project": "ok", "bytes": 900, "widest_at_recommended": 200}]))
+    assert not any("warning" in ln for ln in lines)
+
+
+def test_an_empty_sizing_report_is_silent(setup):
+    """resolve_chunks returns {} when the count was overridden or guessed;
+    reporting on it would describe a measurement that never happened."""
+    assert _shortfall(setup, {}) == []

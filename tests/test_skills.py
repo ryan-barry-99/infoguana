@@ -369,3 +369,15 @@ def test_deeply_nested_frontmatter_degrades_instead_of_raising():
     # describe() must stay usable — that is the call the context pin makes.
     name, description = skills.describe(make_note(body))
     assert name and description
+
+
+def test_skill_lookup_covers_the_manifest():
+    """`get_skill` must be able to resolve anything `context` advertises.
+
+    The manifest is where an agent learns a skill's name, so a lookup
+    bound below the manifest's fetch bound would list skills that then
+    come back "not found" — the two constants live in different modules
+    and nothing but this test couples them.
+    """
+    from app import graph, mcp_server
+    assert mcp_server.SKILL_LOOKUP_LIMIT >= graph.SKILLS_FETCH_LIMIT

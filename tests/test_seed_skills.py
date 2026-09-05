@@ -253,3 +253,24 @@ def test_empty_seed_directory_does_not_latch_the_sentinel(unseeded, monkeypatch)
     # And a later boot, once the documents are there, still seeds.
     assert seed_skills.seed_if_needed(unseeded) == len(
         seed_skills.seed_documents())
+
+
+def test_the_manifest_admits_a_large_skill_corpus(unseeded):
+    """The bounds are runaway backstops, not a ration on writing skills.
+
+    250 skills at the measured median entry cost is well inside both
+    bounds; under the previous 6000-token cap this truncated at ~60. The
+    transport, not this cap, is what ultimately limits the manifest —
+    see the SKILLS_TOKEN_CAP comment in graph.py.
+    """
+    from app.models import NoteCreate
+    desc = ("Use when the caller needs the thing done. " * 4).strip()
+    for i in range(250):
+        db.create_note(NoteCreate(
+            content=f"---\nname: skill-{i:03d}\ndescription: {desc}\n---\n\nbody",
+            type="skill", project=None, source="test"))
+    ctx = graph.build_context(project="anything", budget_tokens=4000)
+    assert len(ctx["skills"]) == 250
+    assert ctx["skills_truncated"] is False
+    # And the notes budget is untouched by a manifest this size.
+    assert ctx["total_tokens_est"] - ctx["skills_tokens_est"] <= 4000

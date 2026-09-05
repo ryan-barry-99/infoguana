@@ -559,11 +559,19 @@ def infoguana_get_many(ids: list[int]) -> dict:
 
 # How many skill notes a name lookup will scan. Names live in SKILL.md
 # frontmatter, not in an indexed column, so resolving one means reading
-# candidate bodies — bounded here the same way the context manifest is
-# bounded by SKILLS_FETCH_LIMIT. A corpus past this cap degrades to "not
-# found" for the oldest skills, which is why the miss path names the
-# search space it actually covered.
-SKILL_LOOKUP_LIMIT = 300
+# candidate bodies, so the scan is bounded.
+#
+# Must be >= graph.SKILLS_FETCH_LIMIT. The manifest is where an agent
+# learns a skill's name, so anything the manifest can list has to be
+# resolvable by that name; a lookup bound below the manifest bound would
+# advertise skills that then come back "not found". Kept as its own
+# constant rather than importing graph's — this is a different operation
+# with a different cost — and pinned equal by
+# tests/test_skills.py::test_skill_lookup_covers_the_manifest.
+#
+# A corpus past this bound degrades to "not found" for the oldest skills,
+# which is why the miss path names the search space it actually covered.
+SKILL_LOOKUP_LIMIT = 500
 
 
 def _skill_payload(note, requested: str) -> dict:

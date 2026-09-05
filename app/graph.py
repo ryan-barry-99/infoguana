@@ -566,20 +566,31 @@ class _ContextState:
         return {"content": body, "description": n.description, "preview": True}
 
 
-# Skills get both bounds, for the same reason rules do. The per-entry
-# clamp (skills.MANIFEST_DESCRIPTION_CHARS) does not bound the sum: 200
-# clamped lines is ~40k tokens, all of it exempt from budget_tokens and
-# prepended to every session — so a count bound alone was an argument that
-# entry size doesn't matter, not a bound on what the manifest can spend.
-# The token cap is the backstop. Measured across 2,744 deduplicated
-# real-world SKILL.md files, an entry costs a median of 89 tokens as
-# emitted (p90 139, max 295), so 6000 holds roughly 65 skills — about 60
-# for a randomly drawn set, since the long tail bites before the median
-# does. Note this is the cost of the whole serialized entry, not of its
-# name and description alone.
+# Skills get both bounds, but they are runaway backstops, not a ration.
+# Writing skills is the feature; nobody should meet these while using it
+# as intended.
+#
+# What actually bounds the manifest is the SessionStart transport, not
+# either constant here. The blob is delivered as at most
+# routes/onboard.MAX_CHUNKS (128) line-aligned slices of
+# CHUNK_TARGET_BYTES (1700) each, so the whole payload — manifest, rules
+# and memories together — has roughly 217 KB to live in. The manifest
+# renders *before* the rules, so a manifest allowed to grow without limit
+# does not truncate itself: it pushes the rules off the end of the
+# delivery, which is the failure the ordering was chosen to prevent in
+# the first place. That is what the token cap is really protecting.
+#
+# Measured across 2,744 deduplicated real-world SKILL.md files, an entry
+# costs a median of 89 tokens as emitted (p90 139, max 295) — the whole
+# serialized entry, not just its name and description. So 30,000 holds
+# roughly 320 skills, whose manifest is ~69 KB and needs ~74 of the 128
+# chunks on its own, leaving room for a large rule set beside it. The
+# per-entry clamp (skills.MANIFEST_DESCRIPTION_CHARS) does not bound the
+# sum, which is why a count bound alone is not enough.
+#
 # Either bound reports through `skills_truncated`.
-SKILLS_FETCH_LIMIT = 200
-SKILLS_TOKEN_CAP = 6000
+SKILLS_FETCH_LIMIT = 500
+SKILLS_TOKEN_CAP = 30000
 
 
 def _pin_rules(state: _ContextState) -> None:

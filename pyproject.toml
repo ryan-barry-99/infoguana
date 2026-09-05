@@ -46,3 +46,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+# Seeded skill bodies are SKILL.md documents on disk, not string literals,
+# and app/skill_seeds/ is a data directory rather than a package — without
+# this an installed wheel boots with an empty skill manifest.
+[tool.setuptools.package-data]
+app = ["skill_seeds/*.md"]

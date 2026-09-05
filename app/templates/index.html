@@ -81,6 +81,18 @@
         placeholder="project (optional)"
         class="flex-1 rounded-lg bg-slate-900 border border-slate-800 focus:border-slate-600 focus:outline-none px-3 py-2 text-sm placeholder:text-slate-500"
       >
+      {# Skills are typed at capture rather than reclassified afterwards:
+         a pasted SKILL.md already names and describes itself, and the
+         classifier has no `skill` label to give it. Lime matches the chip
+         and the graph hue. #}
+      <label
+        class="rounded-lg bg-slate-900 border border-slate-800 hover:border-lime-500/50 text-slate-300 px-3 py-2 text-sm transition cursor-pointer inline-flex items-center gap-2 shrink-0 has-[:checked]:border-lime-500/60 has-[:checked]:text-lime-300"
+        title="this is a SKILL.md — store it verbatim, skip classification"
+      >
+        <input type="checkbox" name="skill" value="1"
+               class="accent-lime-500 w-3.5 h-3.5">
+        skill
+      </label>
       <label
         class="rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 font-medium px-3 py-2 text-sm transition cursor-pointer inline-flex items-center gap-1"
         title="attach image"

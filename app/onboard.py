@@ -137,6 +137,68 @@ def build(project: str, budget_tokens: int = 4000) -> str:
     parts.append(f"\n\n# current project: `{project}`\n")
     if project_desc:
         parts.append(project_desc.rstrip() + "\n")
+    # Skills pin as a menu, not the meals: one line each, body fetched by
+    # id when the agent decides one applies (see graph._pin_skills).
+    #
+    # Formatted to match how a harness lists its *own* skills — a flat
+    # `- name: description` list under a "the following skills are
+    # available" lead-in — rather than the `### type · project · tags`
+    # shape memories use below. The agent already knows how to read a
+    # skill listing and dispatch off one; making infoguana's skills look
+    # like a different kind of object would mean teaching it a second
+    # convention for the same job. Scope isn't shown for the same reason:
+    # a skill's presence in the list already means it applies here.
+    #
+    # The how-to-use-these text lives here rather than in the protocol
+    # because the protocol is a DB row seeded once at first boot
+    # (db.seed_protocol_if_missing) and thereafter owned by the user —
+    # guidance added to DEFAULT_PROTOCOL would reach fresh installs only,
+    # and never the machines already running. Rendering it from code puts
+    # it in front of every session, and it costs nothing when a project
+    # has no skills.
+    #
+    # Emitted BEFORE the rules, though rules outrank it in priority. The
+    # manifest is ~85 tokens and the rule set is the largest, fastest-
+    # growing section of the blob (~38KB of rules on the largest project), so
+    # any delivery path that truncates loses whatever sits behind them.
+    # That is not hypothetical: this section used to render at 61% depth,
+    # and Codex — which onboards through a single un-chunked hook rather
+    # than N inline slices — received the rules and no skill manifest at
+    # all, so it never learned which skills existed. Cheapest durable fix
+    # is to put the short, load-bearing list where truncation can't reach
+    # it. Ordering here is about surviving the transport, not precedence.
+    skill_entries = ctx.get("skills") or []
+    # Not `if skill_entries` alone: a cap exhausted by the first entry
+    # returns an empty list with skills_truncated set, and guarding on the
+    # rendered list would then suppress the very notice saying the listing
+    # was cut. The blob would read exactly like a project with no skills.
+    # Same argument as the rules block below, which already gets this right.
+    if skill_entries or ctx.get("skills_truncated"):
+        parts.append("\n## skills available\n")
+        parts.append(
+            "\nTreat this exactly as you would your harness's own skill "
+            "listing: each entry is a name, an id, and the trigger condition "
+            "its author wrote. The one difference is loading — call "
+            "`get(id)`, or `get_skill(name)` if you no longer have this "
+            "listing, to read the full instructions, then follow them in "
+            "place of your default approach. Skills are stored as SKILL.md "
+            "documents verbatim, so they carry their own structure. Never act "
+            "on a skill from its one-line description alone: the description "
+            "says *when*, the body says *how*.\n"
+        )
+        for s in skill_entries:
+            parts.append(
+                f"\n- {s['name']} (#{s['id']}): "
+                f"{(s.get('description') or '').strip()}"
+            )
+        if ctx.get("skills_truncated"):
+            parts.append(
+                "\n\n_More skills exist than fit this listing — it was "
+                "truncated. Call `search(query=..., type='skill')` if none "
+                "of the above matches what you're doing._"
+            )
+        parts.append("\n")
+
     rules = ctx.get("rules") or []
     global_rules = [r for r in rules if r.get("scope") == "global"]
     project_rules = [r for r in rules if r.get("scope") != "global"]
@@ -170,10 +232,22 @@ def build(project: str, budget_tokens: int = 4000) -> str:
         for r in project_rules:
             _emit_rule(r)
 
-    parts.append(
+    # The skill manifest is exempt from budget_tokens but still shipped,
+    # so `total_tokens_est` includes it. Printing that figure beside the
+    # budget under a heading that says "relevant memories" bills an exempt
+    # section to the notes allowance and reads as an overrun. The exempt
+    # cost is real and worth showing — it just isn't this budget's.
+    exempt = ctx.get("skills_tokens_est", 0)
+    header = (
         f"\n## relevant memories from infoguana "
-        f"(~{ctx['total_tokens_est']} tokens, budget {budget_tokens})\n"
+        f"(~{ctx['total_tokens_est'] - exempt} tokens, budget {budget_tokens}"
     )
+    if exempt:
+        header += (
+            f"; the skills listing above adds ~{exempt} more, exempt from "
+            f"that budget"
+        )
+    parts.append(header + ")\n")
     notes = ctx.get("notes") or []
     if not notes:
         parts.append(

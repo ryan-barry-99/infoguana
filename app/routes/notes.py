@@ -108,10 +108,19 @@ async def create_from_form(
     background: BackgroundTasks,
 ) -> HTMLResponse:
     """Multipart form endpoint — accepts text content, optional project, and
-    optionally one or more image files. Returns the new note card HTML."""
+    optionally one or more image files. Returns the new note card HTML.
+
+    The `skill` checkbox types the note directly instead of routing it
+    through the classifier. Skills are the one capture the classifier can
+    only get wrong — `skill` isn't in its label set, so a pasted SKILL.md
+    would come back as a `reference` and never reach the context manifest.
+    A pasted SKILL.md also carries its own name and description in
+    frontmatter, so there is nothing for Haiku to derive; pipeline skips
+    it entirely for this type."""
     form = await request.form()
     content = str(form.get("content") or "").strip()
     project = str(form.get("project") or "").strip()
+    is_skill = bool(form.get("skill"))
     uploads: list[UploadFile] = [u for u in form.getlist("image") if isinstance(u, UploadFile) and u.filename]
 
     if not content and not uploads:
@@ -120,6 +129,7 @@ async def create_from_form(
     note = db.create_note(NoteCreate(
         content=content,
         project=project or None,
+        type="skill" if is_skill else None,
         source="web",
     ))
 
@@ -400,8 +410,13 @@ async def edit_from_form(
             status=seed_status,
         ))
         # Re-embed only when the body actually changed; otherwise the
-        # existing embedding still represents this content.
-        if content_changed:
+        # existing embedding still represents this content. The exception
+        # is a type flip across the `skill` boundary — a skill's preview
+        # is derived from the type (skills.preview_line, not a summary),
+        # so the stored preview is stale in a way no other retype makes
+        # it. Same rule as the MCP `update` tool.
+        crossed_skill = (existing.type == "skill") != (raw_type == "skill")
+        if content_changed or crossed_skill:
             background.add_task(pipeline.process_note, note_id, True)
     else:
         # Auto — reset type so the polling UI shows 'classifying' while

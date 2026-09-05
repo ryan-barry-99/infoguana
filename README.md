@@ -420,7 +420,7 @@ The default is `claude` (`CLAUDE.md`). The body is identical either way —
 it only points at infoguana — so `both` is the right choice for a repo
 whose contributors don't all use the same agent.
 
-### Option B — user-private (`infoguana-onboard` Claude Code skill)
+### Option B — user-private (the `infoguana-onboard` skill)
 
 Best on shared / public repos where you don't want infoguana-specific
 files in the tree. The skill writes CLAUDE.md into Claude Code's own
@@ -428,24 +428,16 @@ project data folder (`~/.claude/projects/<slug>/memory/CLAUDE.md` on
 Linux/macOS, equivalent on Windows) where only your Claude Code session
 sees it.
 
-Install the skill once:
+Nothing to install. `infoguana-onboard` ships as a seeded **skill note**,
+inserted on first boot, so it reaches every client that can talk to the
+MCP server rather than only the one whose skills directory you copied it
+into. It appears in the `## skills available` manifest at the top of each
+session; an agent that wants it calls `get_skill('infoguana-onboard')`
+for the body.
 
-```bash
-# Linux / macOS
-mkdir -p ~/.claude/skills
-cp -r skills/infoguana-onboard ~/.claude/skills/
-```
-
-```powershell
-# Windows
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
-Copy-Item -Recurse skills/infoguana-onboard "$env:USERPROFILE\.claude\skills\"
-```
-
-Then in any project, tell Claude Code: *"onboard this project to
+Then in any project, tell your agent: *"onboard this project to
 infoguana"* — the skill fills in the project name, description, and
-author from the repo context and writes the file. Restart the session
-to pick it up.
+author from the repo context and writes the file.
 
 ---
 

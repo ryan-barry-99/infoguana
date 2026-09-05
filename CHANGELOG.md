@@ -6,6 +6,37 @@ Notable changes to infoguana. Format follows
 This file starts partway through the project's life; changes before the first
 entry below are recorded only in the commit history.
 
+## Unreleased
+
+### Added
+
+- **Skill notes work end to end.** A `skill` note stores a SKILL.md document
+  verbatim, and `context` pins it as a one-line manifest entry — name plus the
+  authored trigger condition — instead of its body. An agent reads the listing,
+  decides a skill applies, and calls `get(id)` for the instructions.
+- **`get_skill(name)` resolves a skill the way it is invoked**, for when the ids
+  are gone: after a context summary, or when the user typed `/some-skill`.
+  Matching is exact after folding case, separators and a leading slash; a miss
+  returns near names, and an unresolvable collision returns the candidates.
+- **`infoguana-onboard` now ships as a seeded skill** rather than a file to copy
+  into `~/.claude/skills/`. It is inserted on first boot from
+  `app/skill_seeds/`, so it reaches every client that can talk to the MCP
+  server, not just the one whose skills directory you populated.
+- The web capture form has a **skill** checkbox that types the note directly.
+  Skills bypass classification entirely — the classifier has no `skill` label,
+  so a pasted SKILL.md would come back as a `reference` and never reach the
+  manifest.
+
+### Changed
+
+- **The skill manifest is exempt from `budget_tokens`.** A session that can
+  afford no memories still has to know which capabilities it has. It carries
+  its own caps instead, and the onboard header reports the exempt cost in a
+  separate clause rather than billing it to the notes allowance.
+- `update` re-derives the preview when a note's type crosses the `skill`
+  boundary in either direction. A skill's preview is a function of its type,
+  so a pure retype previously left an unrelated summary in place.
+
 ## v0.2.0 — 2026-08-17
 
 ### Added

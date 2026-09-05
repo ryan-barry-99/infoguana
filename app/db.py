@@ -265,8 +265,11 @@ def init_db() -> sqlite3.Connection:
     _conn.commit()
     # First-boot seeding of universal global rules. Idempotent — gated by
     # an `app_meta` sentinel so deleted rules stay deleted across restarts.
-    from app import seed_rules
+    from app import seed_rules, seed_skills
     seed_rules.seed_if_needed(_conn)
+    # Separate sentinel from the rule seeder's, so an install that has
+    # already booted still receives the shipped skills. See seed_skills.
+    seed_skills.seed_if_needed(_conn)
     return _conn
 
 
@@ -755,6 +758,62 @@ def list_notes(project: Optional[str] = None,
     sql += " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
     rows = conn.execute(sql, params).fetchall()
+    return [_row_to_note(r, conn) for r in rows]
+
+
+def list_scoped_notes(type: str, project: Optional[str],
+                      limit: int = 200) -> list[Note]:
+    """Notes of `type` visible in `project`: globals (`project IS NULL`)
+    plus the project's own. Globals first, then created_at DESC.
+
+    Globals sort first in SQL, not just in the callers' re-sort, because
+    the cap lands here. Ordering by date alone means a project with
+    `limit` notes newer than any global evicts every global — the exact
+    failure this function exists to prevent, reproduced one scope in.
+
+    Exists because scoping has to happen in SQL, not after the fetch.
+    `list_notes(type=..., limit=N)` applies its cap across *every*
+    project, so filtering the result in Python means a large corpus of
+    other projects' notes can evict this project's entirely — and the
+    rows lost are the oldest, which for the context pins are exactly the
+    globals that should have come first.
+
+    Each scope gets its own share of `limit` rather than competing for one
+    pool, because a single cap fails in whichever direction the ordering
+    points. Ordering by date alone let a project's notes evict every
+    global; putting globals first fixed that and created the mirror
+    problem — once the globals of that type reach `limit`, the project's
+    own notes, the constraints most specific to the session, come back
+    empty while the full global set is returned. Splitting the budget
+    means neither scope can zero out the other, and an unused share is
+    lent to the other scope so a project with no rules of its own still
+    sees all `limit` globals.
+
+    Used by the `rule` and `skill` pins, both of which are two-scope."""
+    conn = get_conn()
+
+    def _fetch(where: str, params: list, cap: int) -> list:
+        if cap <= 0:
+            return []
+        return conn.execute(
+            f"SELECT * FROM notes WHERE type = ? AND {where} "
+            f"ORDER BY created_at DESC LIMIT ?", [type, *params, cap]
+        ).fetchall()
+
+    if not project:
+        rows = _fetch("project IS NULL", [], limit)
+        return [_row_to_note(r, conn) for r in rows]
+
+    # Halve, then lend back whatever the other scope did not use. Globals
+    # are fetched first so they keep priority when both scopes are over
+    # their share.
+    half = max(1, limit // 2)
+    globals_ = _fetch("project IS NULL", [], half)
+    project_rows = _fetch("project = ?", [project], limit - len(globals_))
+    if len(globals_) == half and len(project_rows) < limit - half:
+        globals_ = _fetch("project IS NULL", [], limit - len(project_rows))
+
+    rows = globals_ + project_rows
     return [_row_to_note(r, conn) for r in rows]
 
 

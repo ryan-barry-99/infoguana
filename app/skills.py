@@ -115,7 +115,16 @@ def parse_frontmatter(body: str) -> dict[str, str]:
         if any(isinstance(ev, yaml.AliasEvent) for ev in yaml.parse(block)):
             return {}
         data = yaml.safe_load(block)
-    except yaml.YAMLError:
+    # RecursionError is not a YAMLError. PyYAML composes nested nodes
+    # recursively, so ~500 levels of `[` — a 1 KB block, no anchors, so the
+    # alias guard above never sees it — blows the stack instead of raising a
+    # parse error. Unhandled, that propagates out of `describe`, and
+    # `_pin_skills` calls `describe` on every skill in scope: one such note
+    # saved with project=None makes `context()` raise for every project and
+    # every session. The stack has unwound by the time this runs, so
+    # degrading to "no frontmatter" here is safe and matches the intent
+    # stated above.
+    except (yaml.YAMLError, RecursionError):
         return {}
     if not isinstance(data, dict):
         return {}

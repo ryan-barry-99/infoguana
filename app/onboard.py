@@ -158,7 +158,8 @@ def build(project: str, budget_tokens: int = 4000) -> str:
     # has no skills.
     #
     # Emitted BEFORE the rules, though rules outrank it in priority. The
-    # manifest is ~85 tokens and the rule set is the largest, fastest-
+    # manifest runs a few hundred tokens — ~870 at nine skills, and it
+    # grows with each one added — while the rule set is the largest, fastest-
     # growing section of the blob (~38KB of rules on the largest project), so
     # any delivery path that truncates loses whatever sits behind them.
     # That is not hypothetical: this section used to render at 61% depth,

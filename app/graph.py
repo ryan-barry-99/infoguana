@@ -571,8 +571,12 @@ class _ContextState:
 # clamped lines is ~40k tokens, all of it exempt from budget_tokens and
 # prepended to every session — so a count bound alone was an argument that
 # entry size doesn't matter, not a bound on what the manifest can spend.
-# The token cap is the backstop; ~115 real-world skills fit under it at
-# the measured median entry size of ~51 tokens.
+# The token cap is the backstop. Measured across 2,744 deduplicated
+# real-world SKILL.md files, an entry costs a median of 89 tokens as
+# emitted (p90 139, max 295), so 6000 holds roughly 65 skills — about 60
+# for a randomly drawn set, since the long tail bites before the median
+# does. Note this is the cost of the whole serialized entry, not of its
+# name and description alone.
 # Either bound reports through `skills_truncated`.
 SKILLS_FETCH_LIMIT = 200
 SKILLS_TOKEN_CAP = 6000
@@ -633,9 +637,9 @@ def _pin_skills(state: _ContextState) -> None:
     So each skill pins as a dict of `id`, `name`, `description` and a
     little scope metadata — rendered by `onboard.build` as
     `- {name} (#{id}): {description}`. Measured over 2,744 real SKILL.md
-    files: median 51 tokens per entry (p90 100, max 211), since a good
-    description spells out every trigger, against a median 1,808 for the
-    body it stands in for (p90 4,230). The
+    files: a median of 89 tokens per emitted entry (p90 139, max 295),
+    since a good description spells out every trigger, against a median
+    1,808 for the body it stands in for (p90 4,230). The
     agent calls `get(id)` once it decides the skill applies. Name and
     description come from the note's SKILL.md frontmatter, not from the
     haiku preview — a trigger condition has to be exact.
@@ -664,12 +668,7 @@ def _pin_skills(state: _ContextState) -> None:
     )
     for skill in scoped:
         name, description = skills.describe(skill)
-        tokens = _approx_tokens(f"{name} {description}") + 10
-        if state.skills_tokens + tokens > SKILLS_TOKEN_CAP:
-            state.skills_truncated = True
-            break
-        state.skills_tokens += tokens
-        state.skills.append({
+        entry = {
             "id": skill.id,
             "name": name,
             "description": description,
@@ -678,8 +677,21 @@ def _pin_skills(state: _ContextState) -> None:
             "scope": "global" if skill.project is None else "project",
             "tags": skill.tags,
             "updated_at": skill.updated_at.isoformat(),
-            "tokens_est": tokens,
-        })
+        }
+        # Size the entry as it is actually emitted, not just its name and
+        # description. The surrounding metadata and JSON punctuation are
+        # about a quarter of what ships per skill, and once the manifest is
+        # exempt from budget_tokens this total is its only bound — an
+        # estimate that undercounts lets SKILLS_TOKEN_CAP admit
+        # meaningfully more than it promises, and `skills_tokens_est` is
+        # the field the `context` docstring points callers at.
+        tokens = _approx_tokens(json.dumps(entry))
+        if state.skills_tokens + tokens > SKILLS_TOKEN_CAP:
+            state.skills_truncated = True
+            break
+        state.skills_tokens += tokens
+        entry["tokens_est"] = tokens
+        state.skills.append(entry)
         state.seen_note_ids.add(skill.id)
 
 

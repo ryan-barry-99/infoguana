@@ -199,3 +199,57 @@ def test_manifest_cost_is_not_billed_to_the_notes_budget(unseeded):
     charged = ctx["total_tokens_est"] - ctx["skills_tokens_est"]
     assert f"(~{charged} tokens, budget 4000" in header, header
     assert f"adds ~{ctx['skills_tokens_est']} more, exempt" in header, header
+
+
+# --- regressions from the first review round -------------------------------
+
+def test_project_scoped_skill_does_not_suppress_the_shipped_globals(unseeded):
+    """A skill someone wrote for one repo says nothing about whether this
+    install wants the shipped global set. Treating it as a veto withheld
+    infoguana-onboard permanently, since the sentinel latches."""
+    from app.models import NoteCreate
+    db.create_note(NoteCreate(
+        content="---\nname: local\ndescription: x\n---\n\nbody",
+        type="skill", project="some-repo", source="test"))
+    assert seed_skills.seed_if_needed(unseeded) == len(
+        seed_skills.seed_documents())
+    names = {skills.describe(n)[0]
+             for n in db.list_notes(type="skill", limit=50)}
+    assert "infoguana-onboard" in names
+
+
+def test_a_global_skill_still_suppresses_seeding(unseeded):
+    """The other half of the same predicate: a curated *global* set is what
+    the shipped one must not be piled onto."""
+    from app.models import NoteCreate
+    db.create_note(NoteCreate(
+        content="---\nname: mine\ndescription: x\n---\n\nbody",
+        type="skill", project=None, source="test"))
+    assert seed_skills.seed_if_needed(unseeded) == 0
+
+
+def test_seeded_preview_is_clamped(unseeded, monkeypatch):
+    """preview_line returns the description's whole first sentence, and
+    4.1% of real SKILL.md descriptions run past the preview bound."""
+    from app import classify
+    long_desc = "Use this when " + "something happens and " * 30 + "you care."
+    body = f"---\nname: verbose\ndescription: {long_desc}\n---\n\n# V\n\nbody\n"
+    monkeypatch.setattr(seed_skills, "seed_documents",
+                        lambda: [("verbose", body)])
+    seed_skills.seed_if_needed(unseeded)
+    note = db.list_notes(type="skill", limit=10)[0]
+    assert len(skills.preview_line(note)) > classify.PREVIEW_MAX_CHARS, \
+        "fixture no longer exercises the clamp"
+    assert len(note.preview) <= classify.PREVIEW_MAX_CHARS
+
+
+def test_empty_seed_directory_does_not_latch_the_sentinel(unseeded, monkeypatch):
+    """An absent data directory means the package did not ship it, not that
+    this database declined the skills. Latching would make fixing the
+    packaging useless — no later boot would retry."""
+    monkeypatch.setattr(seed_skills, "seed_documents", lambda: [])
+    assert seed_skills.seed_if_needed(unseeded) == 0
+    assert _meta(unseeded, seed_skills._META_KEY) is None
+    # And a later boot, once the documents are there, still seeds.
+    assert seed_skills.seed_if_needed(unseeded) == len(
+        seed_skills.seed_documents())

@@ -356,3 +356,16 @@ def test_yaml_is_the_parser_not_a_hand_rolled_one():
     """Guards the choice, not the behavior: if someone swaps in a
     hand-parser, the multi-line + quoted-colon cases above go with it."""
     assert yaml.safe_load("a: 1") == {"a": 1}
+
+
+def test_deeply_nested_frontmatter_degrades_instead_of_raising():
+    """PyYAML composes nested nodes recursively, so ~500 levels of `[` in a
+    1 KB block raises RecursionError — which is not a YAMLError and so
+    escaped the degrade-to-{} guard. `_pin_skills` calls describe() on
+    every skill in scope, so one such note saved globally made context()
+    raise for every project and every session."""
+    body = "---\na: " + "[" * 500 + "]" * 500 + "\n---\n\n# T\n\nprose\n"
+    assert skills.parse_frontmatter(body) == {}
+    # describe() must stay usable — that is the call the context pin makes.
+    name, description = skills.describe(make_note(body))
+    assert name and description

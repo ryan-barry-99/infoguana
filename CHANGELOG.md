@@ -22,6 +22,10 @@ entry below are recorded only in the commit history.
   into `~/.claude/skills/`. It is inserted on first boot from
   `app/skill_seeds/`, so it reaches every client that can talk to the MCP
   server, not just the one whose skills directory you populated.
+- **`add` echoes back the derived `manifest_entry`** for a skill — the name and
+  description the manifest will actually carry, with a warning when they came
+  from the body rather than parsed frontmatter. A frontmatter mistake is visible
+  at write time instead of silently registering the wrong trigger condition.
 - The web capture form has a **skill** checkbox that types the note directly.
   Skills bypass classification entirely — the classifier has no `skill` label,
   so a pasted SKILL.md would come back as a `reference` and never reach the

@@ -360,7 +360,12 @@ def infoguana_add(
     everywhere, `project=<name>` to scope it to one repo.
 
     Skill notes skip classification entirely — they carry their own name and
-    description, and the classifier has no `skill` label to give them.
+    description, and the classifier has no `skill` label to give them. Like
+    'rule', a skill is authored by hand: write one only when the user asks
+    for it, and put a how-to you inferred in a 'reference' note instead. A
+    skill you write unprompted pins into every future session's manifest,
+    above the memories and exempt from the token budget, so it is the one
+    note type that cannot be crowded out.
 
     After the note saves, scan its content for relationships to existing
     notes — explicit `#NNN` references, "this supersedes the old decision",

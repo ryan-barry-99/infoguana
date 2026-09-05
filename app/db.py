@@ -789,7 +789,9 @@ def list_scoped_notes(type: str, project: Optional[str],
     lent to the other scope so a project with no rules of its own still
     sees all `limit` globals.
 
-    Used by the `rule` and `skill` pins, both of which are two-scope."""
+    Used by the `skill` pin. The `rule` pin is two-scope as well but still
+    fetches through `list_notes` and filters in Python — the very pattern
+    described above — so it does not yet get this."""
     conn = get_conn()
 
     def _fetch(where: str, params: list, cap: int) -> list:

@@ -19,7 +19,7 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from app import skills
+from app import classify, skills
 from app.models import NoteCreate, NoteUpdate
 
 
@@ -56,8 +56,14 @@ def _mark_seeded(conn: sqlite3.Connection) -> None:
 
 
 def _has_existing_skills(conn: sqlite3.Connection) -> bool:
+    # Global scope only, matching seed_rules._has_existing_rules. A curated
+    # *global* set is what the shipped one should not be piled onto; a
+    # project-scoped skill someone wrote for one repo says nothing about
+    # whether this install wants infoguana-onboard, and treating it as a
+    # veto would permanently withhold the one skill the whole seeding path
+    # exists to deliver.
     row = conn.execute(
-        "SELECT 1 FROM notes WHERE type = 'skill' LIMIT 1"
+        "SELECT 1 FROM notes WHERE type = 'skill' AND project IS NULL LIMIT 1"
     ).fetchone()
     return row is not None
 
@@ -99,8 +105,20 @@ def seed_if_needed(conn: sqlite3.Connection) -> int:
                     "without insert")
         return 0
 
+    documents = seed_documents()
+    if not documents:
+        # Do NOT mark seeded here. An empty result means the data directory
+        # did not ship — a wheel built before the package-data entry, or an
+        # install layout that puts it elsewhere — not that this DB has
+        # declined the skills. Latching the sentinel would make fixing the
+        # packaging useless, since no later boot would retry and the
+        # operator would have to delete the app_meta row by hand.
+        logger.warning("seed_skills: no seed documents under %s; leaving "
+                       "unseeded so a later boot can retry", SEED_DIR)
+        return 0
+
     new_ids: list[int] = []
-    for stem, body in seed_documents():
+    for stem, body in documents:
         note = db.create_note(NoteCreate(
             content=body,
             type="skill",
@@ -127,7 +145,12 @@ def seed_if_needed(conn: sqlite3.Connection) -> int:
                 "frontmatter name should match", stem, name)
         db.update_note(note.id, NoteUpdate(
             description=description,
-            preview=skills.preview_line(note),
+            # Through clamp_preview like every other write to this column:
+            # preview_line returns the description's whole first sentence,
+            # and 4.1% of real SKILL.md descriptions run past the 200-char
+            # preview bound. Unclamped, such a skill would sit over budget
+            # in every search hit until its first edit silently shortened it.
+            preview=classify.clamp_preview(skills.preview_line(note)),
         ))
         new_ids.append(note.id)
 

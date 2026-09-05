@@ -7,7 +7,8 @@ somebody's private files, and it had no tests at all. Two groups here:
     `settings` plus a path — no database, no server, no fixture;
   * the two settings that now default to closed, `fs_allowlist` (empty,
     so the filesystem tools are off) and `mcp_allowed_hosts` (empty, so
-    the SDK's Host/Origin checks stay off).
+    the transport's Host/Origin checks are explicitly disabled rather
+    than left for the SDK to auto-enable).
 
 `_audit` writes to the `fs_reads` table and swallows every exception, so
 the read paths below run without a database. It is monkeypatched anyway
@@ -421,16 +422,40 @@ def test_empty_env_value_parses_as_no_entries(
 def test_transport_security_is_off_when_no_hosts_are_configured(
     monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """None, not a loopback-only settings object.
+    """Explicitly disabled settings, NOT None.
 
-    Loopback-only would enable rebinding protection and lock out every
-    client reaching the server by LAN or tailnet name — the common
-    deployment — which is a worse default than no checks at all.
+    None is not the same as off. FastMCP auto-enables a loopback-only
+    allowlist when handed None while its own host is loopback, which locks
+    out every client reaching the server by LAN or tailnet name — the
+    common deployment, and the opposite of the documented default.
     """
     from app import mcp_server
 
     monkeypatch.setattr(settings, "mcp_allowed_hosts", [])
-    assert mcp_server._transport_security() is None
+    ts = mcp_server._transport_security()
+    assert ts is not None
+    assert ts.enable_dns_rebinding_protection is False
+
+
+def test_default_transport_settings_survive_the_fastmcp_constructor() -> None:
+    """The helper's return value only matters as FastMCP resolves it.
+
+    Asserting on the helper alone is what let the loopback-only default go
+    unnoticed: the auto-enable happens inside the constructor, so this pins
+    the effective settings rather than the argument. FastMCP is built here
+    the way app/mcp_server.py builds it — without `host`, which is why the
+    SDK's loopback default is the one in play.
+    """
+    from mcp.server.fastmcp import FastMCP
+
+    from app import mcp_server
+
+    effective = FastMCP(
+        name="probe",
+        transport_security=mcp_server._transport_security(),
+    ).settings.transport_security
+    assert effective is not None
+    assert effective.enable_dns_rebinding_protection is False
 
 
 def test_transport_security_keeps_loopback_alongside_configured_hosts(
@@ -446,4 +471,7 @@ def test_transport_security_keeps_loopback_alongside_configured_hosts(
     # Configuring a LAN host must not cost the operator localhost access.
     for host in mcp_server.LOOPBACK_HOSTS:
         assert host in ts.allowed_hosts
+    # Both schemes: the SDK matches Origin as a whole string, so an operator
+    # behind a TLS proxy would otherwise pass Host and still be refused 403.
     assert "http://10.0.0.5:*" in ts.allowed_origins
+    assert "https://10.0.0.5:*" in ts.allowed_origins

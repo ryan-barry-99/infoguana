@@ -78,8 +78,10 @@ class Settings(BaseSettings):
     # Extra Host/Origin values permitted to reach the MCP endpoint, beyond
     # loopback — comma-separated, ':*' wildcards the port. Set this when
     # clients reach the server by LAN or tailnet IP rather than localhost.
-    # Leaving it unset keeps the SDK default (no DNS-rebinding checks);
-    # setting it turns rebinding protection on with loopback + these hosts.
+    # Leaving it unset disables the DNS-rebinding checks outright, which
+    # _transport_security has to do explicitly — the SDK would otherwise
+    # auto-enable a loopback-only allowlist and refuse LAN clients 421.
+    # Setting it turns protection on with loopback + these hosts.
     #
     #   INFOGUANA_MCP_ALLOWED_HOSTS=10.0.0.5:*,infoguana.tailnet.ts.net
     mcp_allowed_hosts: Annotated[list[str], NoDecode] = []

@@ -34,6 +34,10 @@ entry below are recorded only in the commit history.
   protection, checking `Host` and `Origin` against loopback plus the names you
   list (comma-separated, `:*` wildcards the port). Unset — the default —
   performs no such checks; the bearer token remains the real gate either way.
+- Each configured host is permitted under both `http://` and `https://`. The
+  transport matches `Origin` as a whole string including scheme, so a host
+  listed by an operator running behind a TLS proxy previously passed the `Host`
+  check and was still refused 403.
 
 ### Changed
 
@@ -51,6 +55,15 @@ entry below are recorded only in the commit history.
 
 ### Fixed
 
+- **Clients reaching the MCP endpoint by LAN or tailnet address are no longer
+  refused `421 Invalid Host header`.** The transport left its security settings
+  unset to mean "no checks", but the SDK reads that as a cue to auto-enable a
+  loopback-only allowlist; they are now disabled explicitly. Only installs that
+  never set `INFOGUANA_MCP_ALLOWED_HOSTS` were affected.
+- The `mcp` floor is now 1.10, the first release carrying
+  `mcp.server.transport_security`. An environment already holding 1.9.x
+  satisfied the old `>=1.0` floor, so pip left it in place and the server
+  failed at boot with `ModuleNotFoundError` rather than at install.
 - `config.json` is no longer denied everywhere. It sat in the basename denylist
   despite a comment saying it applied only under `.docker/`, so every project's
   own `config.json` was refused. The Docker credentials file is still blocked by

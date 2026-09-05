@@ -21,22 +21,33 @@ log = logging.getLogger(__name__)
 LOOPBACK_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 
 
-def _transport_security() -> TransportSecuritySettings | None:
+def _transport_security() -> TransportSecuritySettings:
     """Build DNS-rebinding protection from `mcp_allowed_hosts`.
 
     Bearer auth (BearerAuthMiddleware in main.py) is the real gate; this is
-    defense in depth. Returns None when no extra hosts are configured, which
-    leaves the SDK's default of no Host/Origin checks — passing a settings
-    object with only loopback would lock out clients connecting by LAN or
-    tailnet IP, which is the common deployment.
+    defense in depth.
+
+    With no extra hosts configured this returns settings with the checks
+    explicitly disabled. Returning None instead would NOT leave them off:
+    FastMCP auto-enables a loopback-only allowlist whenever it is handed
+    None and its own `host` is loopback, and that host defaults to
+    127.0.0.1 because this module never passes one — `settings.host` is
+    uvicorn's binding and does not reach the SDK. The result would be a
+    421 for every client arriving by LAN or tailnet address, which is the
+    common deployment and the opposite of the documented default.
+
+    Each configured host yields both an http and an https origin. The SDK
+    matches Origin as a whole string including scheme, so a name listed by
+    an operator running behind a TLS proxy would otherwise pass the Host
+    check and still be refused 403.
     """
     if not settings.mcp_allowed_hosts:
-        return None
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
     hosts = LOOPBACK_HOSTS + settings.mcp_allowed_hosts
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=hosts,
-        allowed_origins=[f"http://{h}" for h in hosts],
+        allowed_origins=[f"{scheme}://{h}" for h in hosts for scheme in ("http", "https")],
     )
 
 

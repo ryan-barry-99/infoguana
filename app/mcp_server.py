@@ -7,13 +7,48 @@ import logging
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app import classify, db, duedate, embed, export, fs_access, graph, inference, pipeline, plans, skills, tag_suggest
 from app import github as gh
+from app.config import settings
 from app.models import NoteCreate, NoteType, NoteUpdate
 
 
 log = logging.getLogger(__name__)
+
+
+LOOPBACK_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+
+
+def _transport_security() -> TransportSecuritySettings:
+    """Build DNS-rebinding protection from `mcp_allowed_hosts`.
+
+    Bearer auth (BearerAuthMiddleware in main.py) is the real gate; this is
+    defense in depth.
+
+    With no extra hosts configured this returns settings with the checks
+    explicitly disabled. Returning None instead would NOT leave them off:
+    FastMCP auto-enables a loopback-only allowlist whenever it is handed
+    None and its own `host` is loopback, and that host defaults to
+    127.0.0.1 because this module never passes one — `settings.host` is
+    uvicorn's binding and does not reach the SDK. The result would be a
+    421 for every client arriving by LAN or tailnet address, which is the
+    common deployment and the opposite of the documented default.
+
+    Each configured host yields both an http and an https origin. The SDK
+    matches Origin as a whole string including scheme, so a name listed by
+    an operator running behind a TLS proxy would otherwise pass the Host
+    check and still be refused 403.
+    """
+    if not settings.mcp_allowed_hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    hosts = LOOPBACK_HOSTS + settings.mcp_allowed_hosts
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[f"{scheme}://{h}" for h in hosts for scheme in ("http", "https")],
+    )
 
 
 mcp = FastMCP(
@@ -34,6 +69,7 @@ mcp = FastMCP(
         "in one sentence; speculative links pollute the graph."
     ),
     streamable_http_path="/",
+    transport_security=_transport_security(),
 )
 
 
@@ -1433,8 +1469,9 @@ def infoguana_export(start_id: int,
 # ---------------------------------------------------------------------------
 # Read-only filesystem access.
 #
-# Scoped by an allowlist (INFOGUANA_FS_ALLOWLIST, default /root/code) with a
-# hardcoded denylist for secrets, SSH/GPG keys, `.git/`, and `*.sqlite`.
+# Scoped by an allowlist (INFOGUANA_FS_ALLOWLIST, empty by default, which
+# turns these three tools off) with a hardcoded denylist for secrets,
+# SSH/GPG keys, `.git/`, and `*.sqlite`.
 # Binary files are refused outright — these tools are for source code.
 # Every call is recorded in the `fs_reads` audit table.
 # ---------------------------------------------------------------------------
@@ -1450,8 +1487,9 @@ def infoguana_read_file(path: str,
     numbers survive in your context. Useful when grounding answers in the
     user's actual code rather than memory content.
 
-    Access is restricted to paths under the configured allowlist (default
-    `/root/code`). Secrets, SSH/GPG keys, `.git/` internals, and `*.sqlite`
+    Access is restricted to paths under the operator-configured allowlist,
+    which is empty by default — if no roots are set, every call is refused
+    with a message saying so. Secrets, SSH/GPG keys, `.git/` internals, and `*.sqlite`
     files are denylisted and refused. Binary files are refused. Files over
     the size cap (default 500 KB) require paginated reads via offset+limit.
 

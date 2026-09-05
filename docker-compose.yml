@@ -18,7 +18,12 @@ services:
       INFOGUANA_CLAUDE_BIN: ${INFOGUANA_CLAUDE_BIN:-claude}
       INFOGUANA_CLASSIFY_MODEL: ${INFOGUANA_CLASSIFY_MODEL:-claude-haiku-4-5}
       INFOGUANA_EMBED_MODEL: ${INFOGUANA_EMBED_MODEL:-BAAI/bge-small-en-v1.5}
-      INFOGUANA_FS_ALLOWLIST: ${INFOGUANA_FS_ALLOWLIST:-/root/code}
+      # Empty → the read-only filesystem tools are off. Set to a colon-separated
+      # list of absolute roots (paths as seen inside the container) to enable.
+      INFOGUANA_FS_ALLOWLIST: ${INFOGUANA_FS_ALLOWLIST:-}
+      # Empty → no Host/Origin checks. Set when clients reach the server by a
+      # LAN or tailnet name rather than localhost.
+      INFOGUANA_MCP_ALLOWED_HOSTS: ${INFOGUANA_MCP_ALLOWED_HOSTS:-}
       # Empty → entrypoint generates one and persists it to /data/.mcp_secret.
       INFOGUANA_MCP_SECRET: ${INFOGUANA_MCP_SECRET:-}
       # GitHub integration is optional; chat features degrade gracefully if unset.

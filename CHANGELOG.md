@@ -30,6 +30,14 @@ entry below are recorded only in the commit history.
   Skills bypass classification entirely — the classifier has no `skill` label,
   so a pasted SKILL.md would come back as a `reference` and never reach the
   manifest.
+- `INFOGUANA_MCP_ALLOWED_HOSTS` turns on the MCP transport's DNS-rebinding
+  protection, checking `Host` and `Origin` against loopback plus the names you
+  list (comma-separated, `:*` wildcards the port). Unset — the default —
+  performs no such checks; the bearer token remains the real gate either way.
+- Each configured host is permitted under both `http://` and `https://`. The
+  transport matches `Origin` as a whole string including scheme, so a host
+  listed by an operator running behind a TLS proxy previously passed the `Host`
+  check and was still refused 403.
 
 ### Changed
 
@@ -40,6 +48,26 @@ entry below are recorded only in the commit history.
 - `update` re-derives the preview when a note's type crosses the `skill`
   boundary in either direction. A skill's preview is a function of its type,
   so a pure retype previously left an unrelated summary in place.
+- **Breaking:** `INFOGUANA_FS_ALLOWLIST` is now empty by default, so
+  `read_file` / `list_dir` / `grep` are off until an operator names the roots
+  they may read under. Installs relying on the old `/root/code` default must set
+  it explicitly, or those tools will refuse every call.
+
+### Fixed
+
+- **Clients reaching the MCP endpoint by LAN or tailnet address are no longer
+  refused `421 Invalid Host header`.** The transport left its security settings
+  unset to mean "no checks", but the SDK reads that as a cue to auto-enable a
+  loopback-only allowlist; they are now disabled explicitly. Only installs that
+  never set `INFOGUANA_MCP_ALLOWED_HOSTS` were affected.
+- The `mcp` floor is now 1.10, the first release carrying
+  `mcp.server.transport_security`. An environment already holding 1.9.x
+  satisfied the old `>=1.0` floor, so pip left it in place and the server
+  failed at boot with `ModuleNotFoundError` rather than at install.
+- `config.json` is no longer denied everywhere. It sat in the basename denylist
+  despite a comment saying it applied only under `.docker/`, so every project's
+  own `config.json` was refused. The Docker credentials file is still blocked by
+  its full path.
 
 ## v0.2.0 — 2026-08-17
 

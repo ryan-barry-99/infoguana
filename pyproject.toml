@@ -1,6 +1,6 @@
 [project]
 name = "infoguana"
-version = "0.1.0"
+version = "0.2.0"
 description = "Infoguana — cross-project second brain with semantic search and MCP integration"
 readme = "README.md"
 license = { text = "MIT" }
@@ -17,12 +17,17 @@ dependencies = [
     "httpx>=0.27",
     "markdown-it-py>=3.0",
     "igraph>=0.11",
-    # Upper bound is load-bearing: mcp 2.0 removed `mcp.server.fastmcp`,
-    # which app/mcp_server.py imports at module scope. With a bare
-    # `>=1.0` a fresh install resolves to 2.x and app.main, app.mcp_server
-    # and app.routes.chat all fail to import. Lifting this means porting
-    # to the 2.x server API, not just relaxing the pin.
-    "mcp>=1.0,<2",
+    # Both bounds are load-bearing, and app/mcp_server.py imports from both
+    # affected modules at module scope, so either violation fails at boot
+    # rather than at install.
+    # Lower: `mcp.server.transport_security` does not exist before 1.10, and
+    # an environment already holding 1.9.x satisfies a bare `>=1.0`, so pip
+    # leaves it in place.
+    # Upper: mcp 2.0 removed `mcp.server.fastmcp`, so a bare `<3` resolves a
+    # fresh install to 2.x and app.main, app.mcp_server and app.routes.chat
+    # all fail to import. Lifting it means porting to the 2.x server API,
+    # not just relaxing the pin.
+    "mcp>=1.10,<2",
     "numpy>=1.26",
 ]
 

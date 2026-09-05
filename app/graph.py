@@ -21,7 +21,7 @@ from typing import Iterable, Optional
 import igraph as ig
 import numpy as np
 
-from app import db, duedate
+from app import db, duedate, skills
 from app.models import Note
 
 
@@ -542,8 +542,14 @@ class _ContextState:
     total_tokens: int = 0
     seen_note_ids: set[int] = field(default_factory=set)
     rules: list[dict] = field(default_factory=list)
+    skills: list[dict] = field(default_factory=list)
     active_plans: list[dict] = field(default_factory=list)
     selected: list[dict] = field(default_factory=list)
+    # The skill manifest is exempt from budget_tokens and tracked
+    # separately, so `total_tokens` measures only what the BFS and the
+    # rule pin spent. See _pin_skills for why it is exempt.
+    skills_tokens: int = 0
+    skills_truncated: bool = False
 
     def can_fit(self, tokens: int) -> bool:
         return self.total_tokens + tokens <= self.budget_tokens
@@ -558,6 +564,33 @@ class _ContextState:
         from app import classify  # local to avoid module-load import cycle
         body = n.preview or classify.derive_fallback_preview(n.content or "")
         return {"content": body, "description": n.description, "preview": True}
+
+
+# Skills get both bounds, but they are runaway backstops, not a ration.
+# Writing skills is the feature; nobody should meet these while using it
+# as intended.
+#
+# What actually bounds the manifest is the SessionStart transport, not
+# either constant here. The blob is delivered as at most
+# routes/onboard.MAX_CHUNKS (128) line-aligned slices of
+# CHUNK_TARGET_BYTES (1700) each, so the whole payload — manifest, rules
+# and memories together — has roughly 217 KB to live in. The manifest
+# renders *before* the rules, so a manifest allowed to grow without limit
+# does not truncate itself: it pushes the rules off the end of the
+# delivery, which is the failure the ordering was chosen to prevent in
+# the first place. That is what the token cap is really protecting.
+#
+# Measured across 2,744 deduplicated real-world SKILL.md files, an entry
+# costs a median of 89 tokens as emitted (p90 139, max 295) — the whole
+# serialized entry, not just its name and description. So 30,000 holds
+# roughly 320 skills, whose manifest is ~69 KB and needs ~74 of the 128
+# chunks on its own, leaving room for a large rule set beside it. The
+# per-entry clamp (skills.MANIFEST_DESCRIPTION_CHARS) does not bound the
+# sum, which is why a count bound alone is not enough.
+#
+# Either bound reports through `skills_truncated`.
+SKILLS_FETCH_LIMIT = 500
+SKILLS_TOKEN_CAP = 30000
 
 
 def _pin_rules(state: _ContextState) -> None:
@@ -600,6 +633,77 @@ def _pin_rules(state: _ContextState) -> None:
         })
         state.total_tokens += tokens
         state.seen_note_ids.add(rule.id)
+
+
+def _pin_skills(state: _ContextState) -> None:
+    """Pin `skill` notes as a manifest — one line each, not their bodies.
+
+    Same two-scope model as `_pin_rules`: `project=None` skills are global
+    (available in every project), `project=<this>` skills layer on top,
+    globals first. The difference is what gets emitted. Rules are short
+    and must be *read*, so they pin in full; a skill is a 4-8KB document,
+    and three of them would spend a whole context budget before a single
+    memory loaded.
+
+    So each skill pins as a dict of `id`, `name`, `description` and a
+    little scope metadata — rendered by `onboard.build` as
+    `- {name} (#{id}): {description}`. Measured over 2,744 real SKILL.md
+    files: a median of 89 tokens per emitted entry (p90 139, max 295),
+    since a good description spells out every trigger, against a median
+    1,808 for the body it stands in for (p90 4,230). The
+    agent calls `get(id)` once it decides the skill applies. Name and
+    description come from the note's SKILL.md frontmatter, not from the
+    haiku preview — a trigger condition has to be exact.
+
+    The skill's id lands in `seen_note_ids` so the BFS can't re-emit the
+    same note as an ordinary memory further down, which would charge the
+    budget for the body the manifest exists to avoid.
+
+    The manifest is exempt from `budget_tokens` — a session that can
+    afford no memories still has to know which capabilities it has, and
+    a skill dropped for budget is indistinguishable from one that does
+    not exist. It is bounded separately instead: `SKILLS_FETCH_LIMIT` on
+    the count, `SKILLS_TOKEN_CAP` on the total, `describe`'s clamp on
+    each description. Any of them biting
+    sets `skills_truncated` rather than dropping entries quietly; a skill
+    the agent never sees is a capability it doesn't have.
+    """
+    if state.type_filter is not None and "skill" not in state.type_filter:
+        return
+    scoped = db.list_scoped_notes("skill", state.project,
+                                  limit=SKILLS_FETCH_LIMIT)
+    state.skills_truncated = len(scoped) >= SKILLS_FETCH_LIMIT
+    # Global first, then project-specific. Within each bucket, newest first.
+    scoped.sort(
+        key=lambda s: (0 if s.project is None else 1, -s.created_at.timestamp())
+    )
+    for skill in scoped:
+        name, description = skills.describe(skill)
+        entry = {
+            "id": skill.id,
+            "name": name,
+            "description": description,
+            "type": skill.type,
+            "project": skill.project,
+            "scope": "global" if skill.project is None else "project",
+            "tags": skill.tags,
+            "updated_at": skill.updated_at.isoformat(),
+        }
+        # Size the entry as it is actually emitted, not just its name and
+        # description. The surrounding metadata and JSON punctuation are
+        # about a quarter of what ships per skill, and once the manifest is
+        # exempt from budget_tokens this total is its only bound — an
+        # estimate that undercounts lets SKILLS_TOKEN_CAP admit
+        # meaningfully more than it promises, and `skills_tokens_est` is
+        # the field the `context` docstring points callers at.
+        tokens = _approx_tokens(json.dumps(entry))
+        if state.skills_tokens + tokens > SKILLS_TOKEN_CAP:
+            state.skills_truncated = True
+            break
+        state.skills_tokens += tokens
+        entry["tokens_est"] = tokens
+        state.skills.append(entry)
+        state.seen_note_ids.add(skill.id)
 
 
 def _plan_entry(state: _ContextState, plan: Note, full: bool, tokens: int,
@@ -832,8 +936,10 @@ def build_context(
     about <project>, within ~1500 tokens?"
 
     `rule` notes for the project pin to the very top with full bodies
-    (always-true repo constraints — must be read, not triaged), then active
-    plans/tasks, then the BFS-discovered neighborhood. Each note is emitted
+    (always-true repo constraints — must be read, not triaged), then
+    `skill` notes as a one-line-each manifest (bodies fetched by id on
+    demand), then active plans/tasks, then the BFS-discovered
+    neighborhood. Each note is emitted
     as its haiku-generated preview. Pass `expand_top=N` (capped
     by the caller — mcp_server clamps to 5) to inline full bodies for the
     first N selected notes (active-plans pin first, then by reachability).
@@ -848,14 +954,21 @@ def build_context(
     )
 
     _pin_rules(state)
+    _pin_skills(state)
     _pin_active_work(state)
     stopped = _bfs_neighborhood(state, max_hops, per_node_k)
 
     return {
         "project": project,
         "budget_tokens": budget_tokens,
-        "total_tokens_est": state.total_tokens,
+        # total = the whole payload a caller renders; the skill
+        # manifest is exempt from budget_tokens but still shipped, so it
+        # is counted here and reported separately below.
+        "total_tokens_est": state.total_tokens + state.skills_tokens,
         "rules": state.rules,
+        "skills_tokens_est": state.skills_tokens,
+        "skills_truncated": state.skills_truncated,
+        "skills": state.skills,
         "active_plans": state.active_plans,
         "notes": state.selected,
         "stopped": stopped,

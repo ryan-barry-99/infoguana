@@ -8,7 +8,7 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from app import classify, db, duedate, embed, export, fs_access, graph, inference, pipeline, plans, tag_suggest
+from app import classify, db, duedate, embed, export, fs_access, graph, inference, pipeline, plans, skills, tag_suggest
 from app import github as gh
 from app.models import NoteCreate, NoteType, NoteUpdate
 
@@ -71,7 +71,7 @@ MAX_GET_MANY = 20
 # chat-eligible tool only requires updating one list.
 CHAT_ALLOWED_TOOLS: tuple[str, ...] = (
     "search", "similar", "add", "update", "delete",
-    "recent", "get", "context",
+    "recent", "get", "get_skill", "context",
     "link", "unlink", "traverse",
     "plan_complete",
     "gh_issue_get", "gh_issue_comments", "gh_issue_list",
@@ -329,12 +329,43 @@ def infoguana_add(
     constraints the user has stated — don't infer rules from observed
     patterns.
 
-    Use type='skill' for a packaged procedure an agent follows in place of
-    its default approach — a SKILL.md document stored verbatim, whose
-    description says *when* to use it and whose body says *how*. Like
-    'rule', it is authored by hand and never assigned by the classifier.
-    Write one only when the user asks for it; a how-to you inferred belongs
-    in a 'reference' note instead.
+    Use type='skill' for a reusable procedure — the how-to for a task that
+    recurs. Skills pin into `context` as a one-line manifest entry (name +
+    description) and their bodies load only when an agent decides one
+    applies, so they're the right home for instructions too long to pin and
+    too specific to rediscover.
+
+    **A skill body must be a SKILL.md document, frontmatter first**, because
+    that frontmatter *is* the manifest entry:
+
+        ---
+        name: run-migrations
+        description: Apply pending Alembic migrations against a local
+          database. Use when the user asks to migrate, after pulling a
+          branch that adds a revision, or when the app fails on a schema
+          mismatch.
+        ---
+
+        # Run migrations
+        ...steps...
+
+    `name` is the stable identity the skill is invoked by — kebab-case, no
+    spaces. `description` is the *trigger condition*, not a summary: it is
+    the only thing a future agent sees before deciding to load the body, so
+    enumerate the situations that should fire it. Without frontmatter the
+    manifest falls back to the first heading and first paragraph, which
+    usually reads as a description of the topic rather than of when to act.
+
+    Two scopes, like rules: `project=None` for a skill that applies
+    everywhere, `project=<name>` to scope it to one repo.
+
+    Skill notes skip classification entirely — they carry their own name and
+    description, and the classifier has no `skill` label to give them. Like
+    'rule', a skill is authored by hand: write one only when the user asks
+    for it, and put a how-to you inferred in a 'reference' note instead. A
+    skill you write unprompted pins into every future session's manifest,
+    above the memories and exempt from the token budget, so it is the one
+    note type that cannot be crowded out.
 
     After the note saves, scan its content for relationships to existing
     notes — explicit `#NNN` references, "this supersedes the old decision",
@@ -399,7 +430,30 @@ def infoguana_add(
     except Exception:
         log.exception("process_note failed for id %d", note.id)
     final = db.get_note(note.id)
-    return _note_dict(final) if final else _note_dict(note)
+    out = _note_dict(final) if final else _note_dict(note)
+    if (final or note).type == "skill":
+        # Echo back what the manifest entry actually became. `add` otherwise
+        # returns neither name nor description, so an author had no way to
+        # see the result of a frontmatter mistake — and the most common one,
+        # an unquoted colon in the description, makes parse_frontmatter
+        # degrade to {} and describe() fall back to the body's first
+        # heading and paragraph. The note stores fine and lists fine; it
+        # just carries prose where its trigger condition should be, and
+        # nothing anywhere raises. Reporting the derived entry (and saying
+        # when it came from the fallback path) turns a silent
+        # misregistration into something the author can see and fix.
+        name, description = skills.describe(final or note)
+        out["manifest_entry"] = {"name": name, "description": description}
+        if not skills.parse_frontmatter((final or note).content or ""):
+            out["manifest_entry"]["warning"] = (
+                "No usable YAML frontmatter was parsed, so this name and "
+                "description were derived from the body's first heading and "
+                "paragraph rather than authored. A colon inside an unquoted "
+                "description is the usual cause — quote the value and call "
+                "`update` if this entry is not what you intended."
+            )
+    return out
+
 
 
 @mcp.tool(name="tag_suggest")
@@ -503,6 +557,125 @@ def infoguana_get_many(ids: list[int]) -> dict:
     return {"notes": notes, "missing": missing}
 
 
+# How many skill notes a name lookup will scan. Names live in SKILL.md
+# frontmatter, not in an indexed column, so resolving one means reading
+# candidate bodies, so the scan is bounded.
+#
+# Must be >= graph.SKILLS_FETCH_LIMIT. The manifest is where an agent
+# learns a skill's name, so anything the manifest can list has to be
+# resolvable by that name; a lookup bound below the manifest bound would
+# advertise skills that then come back "not found". Kept as its own
+# constant rather than importing graph's — this is a different operation
+# with a different cost — and pinned equal by
+# tests/test_skills.py::test_skill_lookup_covers_the_manifest.
+#
+# A corpus past this bound degrades to "not found" for the oldest skills,
+# which is why the miss path names the search space it actually covered.
+SKILL_LOOKUP_LIMIT = 500
+
+
+def _skill_payload(note, requested: str) -> dict:
+    name, description = skills.describe(note)
+    return {
+        **_note_dict(note),
+        "name": name,
+        "description": description,
+        "scope": "global" if note.project is None else "project",
+        "requested_name": requested,
+    }
+
+
+def _skill_stub(note) -> dict:
+    name, description = skills.describe(note)
+    return {"id": note.id, "name": name, "description": description,
+            "project": note.project,
+            "scope": "global" if note.project is None else "project"}
+
+
+@mcp.tool(name="get_skill")
+def infoguana_get_skill(name: str, project: Optional[str] = None) -> dict:
+    """Fetch a skill's full SKILL.md body by name, the way it is invoked.
+
+    The manifest in `context` lists each skill as `name (#id)`, and `get(id)`
+    works fine when you are holding that listing. This is for when you are
+    not: the user typed `/brain-review`, a rule or another note referred to a
+    skill by name, or your context was summarized and the ids went with it.
+    A name is the skill's stable identity — ids are not portable across
+    installs and do not survive a note being re-added.
+
+    Matching is exact after a light fold — case, spaces/underscores vs
+    hyphens, and a leading `/` — so `/Brain_Review` and `brain-review` both
+    resolve. Nothing fuzzier: a wrong skill followed confidently is worse
+    than a miss, and a miss returns `suggestions` with the near names.
+
+    Scope mirrors the manifest. Pass `project` and you search that project's
+    skills plus the globals, with a project skill winning over a global of
+    the same name — that is how a project overrides a global. Omit `project`
+    and the search covers every skill in the corpus, which is the right
+    default when you are chasing a name you saw somewhere and don't know
+    where it lives.
+
+    When one name matches several skills that the scope can't separate (two
+    projects both defining `deploy`), no body is returned — you get
+    `ambiguous` with the candidates, so you can re-call with the project or
+    with `get(id)`. Returns the same shape as `get` plus `name`,
+    `description`, and `scope`.
+
+    Args:
+        name: The skill's frontmatter name, e.g. 'brain-review'.
+        project: Project scope to search alongside the globals. Omit to
+            search every project.
+    """
+    if not (name or "").strip():
+        return {"error": "name is required"}
+
+    if project:
+        scoped = db.list_scoped_notes("skill", project, limit=SKILL_LOOKUP_LIMIT)
+    else:
+        scoped = db.list_notes(type="skill", limit=SKILL_LOOKUP_LIMIT)
+
+    matches = skills.find_by_name(scoped, name)
+    # A project skill shadows a global of the same name; that is the whole
+    # point of the two scopes. Only a collision the scope can't resolve —
+    # two projects, or (impossibly) two notes in one scope — is ambiguous.
+    if len(matches) > 1 and project:
+        project_local = [n for n in matches if n.project is not None]
+        if len(project_local) == 1:
+            matches = project_local
+
+    if len(matches) == 1:
+        return _skill_payload(matches[0], name)
+
+    if len(matches) > 1:
+        return {
+            "error": "ambiguous name",
+            "requested_name": name,
+            "ambiguous": [_skill_stub(n) for n in matches],
+            "hint": "re-call with project=<name>, or get(id) for the one you want",
+        }
+
+    result: dict = {
+        "error": "not found",
+        "requested_name": name,
+        "searched": f"project={project} plus globals" if project
+                    else "all projects",
+        "suggestions": skills.suggest_names(scoped, name),
+    }
+    # A project-scoped lookup that missed is worth one more read: the skill
+    # may simply live in another project, and saying so beats letting the
+    # agent conclude it doesn't exist. The body stays unfetched — a skill
+    # scoped to another repo can reference tooling this one doesn't have,
+    # so crossing that boundary is the caller's call to make explicitly.
+    if project:
+        elsewhere = skills.find_by_name(
+            db.list_notes(type="skill", limit=SKILL_LOOKUP_LIMIT), name)
+        if elsewhere:
+            result["elsewhere"] = [_skill_stub(n) for n in elsewhere]
+            result["hint"] = ("exists outside this project's scope; re-call "
+                              "with that project, or get(id)")
+    return result
+
+
 VALID_PLAN_STATUSES = {"not_started", "pending", "complete"}
 
 
@@ -596,7 +769,18 @@ def infoguana_update(
     ))
     if updated is None:
         return {"error": "update failed", "id": id}
-    if content is not None:
+    # Re-derive when the body changed, or when the type crossed the
+    # `skill` boundary in either direction. `skill` is the first type
+    # whose preview is a *function of the type*: process_note computes
+    # skills.preview_line for skills and a summary for everything else.
+    # Before this, a pure type flip left the old preview in place — a
+    # retyped skill kept its unrelated summary, and a note retyped *to*
+    # skill never got its "name — first sentence" line. Every other
+    # retype (plan to task, say) derives its preview the same way from
+    # the same body, so re-running for those would spend a classify call
+    # to reproduce the identical string.
+    crossed_skill = t is not None and (existing.type == "skill") != (t == "skill")
+    if content is not None or crossed_skill:
         try:
             pipeline.process_note(id)
         except Exception:
@@ -713,7 +897,21 @@ def infoguana_context(
     constraints that must be read, not triaged. Two scopes: rules with
     `project=None` are *global* (surface in every project's context), rules
     scoped to this project layer on top. Globals come first, then
-    project-specific. Active plans/tasks pin next, then the BFS neighborhood.
+    project-specific.
+
+    `skill` notes pin next as a **manifest** under `skills` — one entry
+    each carrying `id`, `name`, and `description`, never the body. The
+    description is the trigger condition, not the instructions: when a
+    task matches one, call `get(id)` to read the full SKILL.md body and
+    follow it. Bodies are kept out of the payload on purpose (a skill
+    runs 4-8KB), so an entry costs ~100 tokens instead of ~1500.
+
+    Active plans/tasks pin after that, then the BFS neighborhood.
+
+    The skill manifest is exempt from `budget_tokens` and carries its own
+    caps; `skills_tokens_est` reports what it cost, and `skills_truncated`
+    says whether a bound cut the listing. Budget for the notes slice and
+    read that field for the rest.
 
     Each note is returned as its haiku-generated preview with
     `preview: True` set on the dict. The 4000-token budget thus surfaces a

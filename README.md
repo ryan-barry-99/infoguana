@@ -29,8 +29,10 @@ an agent can triage 20 results for a few hundred tokens and only pull full
 bodies (`get` / `get_many` / `expand_top=N`) for the ones worth quoting.
 
 **SessionStart loads a layered, token-budgeted context pack.** On a new
-Claude Code session, the hook packs the agent's first turn with:
-**global-scope rules** (cross-project guidance the agent must follow
+Claude Code session, the hook packs the agent's first turn with: a
+**skill manifest** (one line per available skill — name, id, and trigger
+condition — exempt from the token budget, with bodies fetched by id on
+demand), **global-scope rules** (cross-project guidance the agent must follow
 everywhere — "never reference infoguana note IDs in code", "previews are
 for triage, not citation", etc. — a starter set ships pre-seeded on first
 boot), **project-scope rules** (anything tagged to this specific project),
@@ -44,6 +46,19 @@ past the budget, it's dropped.
   <br><sub><em>Search-and-filter view: combine a text query with type/tag/status facets across the corpus. Each hit expands to the full rendered note inline.</em></sub>
   <br><br>
 </div>
+
+**Skills live in infoguana, not in a per-harness skills directory.** A
+`skill` note's body is a SKILL.md file verbatim — frontmatter and all — so
+any client that can reach the MCP server gets the project's skills with no
+harness-specific adaptation and no symlink farm per machine. Skills pin as
+a *menu, not the meals*: one `name — description` line each, the
+description being the trigger condition its author wrote rather than a
+generated preview, and the agent calls `get(id)` — or `get_skill(name)`
+when the user invoked one by name — for the body once it decides a skill
+applies. A skill runs 4-8KB; three pinned in full would spend a whole
+context budget before a single memory loaded. The manifest is exempt from
+that budget and bounded separately, because a session that can afford no
+memories still has to know which capabilities it has.
 
 **Notes form a typed graph.** Edges carry meaning: `implements`,
 `supersedes`, `references`, `caused_by`, `bundled_with`, `prerequisite_for`.
@@ -111,6 +126,7 @@ in a different repo — sees that knowledge surface again.
 - `similar(text, ...)` — pure semantic nearest-neighbor
 - `recent(project?, limit?)` — latest notes
 - `get(id)` / `get_many(ids)` — fetch by id
+- `get_skill(name, project?)` — fetch a skill's SKILL.md body by its name
 - `context(project, budget_tokens?)` — preview pack for an agent's first turn
 - `history(id)` — version history (diffs across updates)
 - `add(content, project?, type?, tags?, ...)` — save a note (auto-classified)
@@ -420,7 +436,7 @@ The default is `claude` (`CLAUDE.md`). The body is identical either way —
 it only points at infoguana — so `both` is the right choice for a repo
 whose contributors don't all use the same agent.
 
-### Option B — user-private (`infoguana-onboard` Claude Code skill)
+### Option B — user-private (the `infoguana-onboard` skill)
 
 Best on shared / public repos where you don't want infoguana-specific
 files in the tree. The skill writes CLAUDE.md into Claude Code's own
@@ -428,24 +444,21 @@ project data folder (`~/.claude/projects/<slug>/memory/CLAUDE.md` on
 Linux/macOS, equivalent on Windows) where only your Claude Code session
 sees it.
 
-Install the skill once:
+Nothing to install on a fresh deployment. `infoguana-onboard` ships as a
+seeded **skill note**, inserted on first boot, so it reaches every client
+that can talk to the MCP server rather than only the one whose skills
+directory you copied it into. It appears in the `## skills available`
+manifest at the top of each session; an agent that wants it calls
+`get_skill('infoguana-onboard')` for the body.
 
-```bash
-# Linux / macOS
-mkdir -p ~/.claude/skills
-cp -r skills/infoguana-onboard ~/.claude/skills/
-```
+The seeder leaves a database that already holds global skill notes alone,
+so it will not pile the shipped set onto a curated one. If that is your
+install, add it once by hand: paste `app/skill_seeds/infoguana-onboard.md`
+into `add(type='skill')` with no project.
 
-```powershell
-# Windows
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
-Copy-Item -Recurse skills/infoguana-onboard "$env:USERPROFILE\.claude\skills\"
-```
-
-Then in any project, tell Claude Code: *"onboard this project to
+Then in any project, tell your agent: *"onboard this project to
 infoguana"* — the skill fills in the project name, description, and
-author from the repo context and writes the file. Restart the session
-to pick it up.
+author from the repo context and writes the file.
 
 ---
 

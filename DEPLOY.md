@@ -5,7 +5,11 @@ covers the rest: Claude CLI auth, filesystem tools, backups, updating.
 
 ## Requirements
 
-- Docker with Compose v2.
+- Docker with Compose. v2 is what CI builds and boots; the compose file
+  avoids v2.24-only syntax, so older Compose parses it too.
+- A `.env` file in the repo root. Every setting has a default, so it may be
+  empty, but compose reads it and refuses to start when it is absent:
+  `cp .env.example .env`.
 - ~2 GB RAM and ~10 GB disk for the image, model weights, and DB growth.
 
 ## Authenticate the containerised claude CLI (optional)
@@ -36,6 +40,7 @@ bake that into the generated `mcp.json` so the installer wires Claude
 Code at the right address:
 
 ```bash
+cp .env.example .env   # if you have not already
 INFOGUANA_PUBLIC_HOST=infoguana.example.com docker compose up -d --build
 python scripts/install-infoguana-mcp.py
 ```

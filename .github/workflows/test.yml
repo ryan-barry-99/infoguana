@@ -65,3 +65,92 @@ jobs:
       # that is the only record of what was actually exercised.
       - name: Run tests
         run: pytest -v --tb=short
+
+  docker:
+    runs-on: ubuntu-latest
+    # The image installs Node and npm-installs the Claude CLI, then bakes a
+    # ~150 MB embedding model into a layer, so a cold build is minutes rather
+    # than seconds. Generous, but still far under the six-hour default.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # Buildx for the GitHub Actions layer cache. Without it every run
+      # re-downloads Node and re-bakes the model, which is most of the wall
+      # clock and all of the flakiness.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Into the local daemon, not a registry: the point is that the
+          # image builds and runs, and nothing here has push credentials.
+          load: true
+          tags: infoguana:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # `env_file: - .env` is the short form, which requires the file to
+      # exist. Creating it the way the README tells a user to is the check:
+      # if that instruction is wrong or the example file is missing, compose
+      # fails here rather than in someone's first install.
+      - name: Create .env the documented way
+        run: cp .env.example .env
+
+      # Renders the compose file with the installed Compose version and
+      # fails on a schema the runner cannot parse. Cheap, and it is the
+      # exact failure that made this file unusable under Compose v1.
+      - name: Validate compose file
+        run: docker compose config
+
+      - name: Start the stack
+        run: docker compose up -d --wait --wait-timeout 180
+
+      - name: Probe the running container
+        run: |
+          set -euo pipefail
+          # Unauthenticated web UI: every route the app serves should answer.
+          for path in healthz "" browse graph agenda capture; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8789/$path")
+            echo "/$path -> $code"
+            [ "$code" = "200" ] || { echo "expected 200"; exit 1; }
+          done
+          # 401, not 404 or 500: proves the MCP app mounted and the bearer
+          # middleware sits in front of it.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8789/mcp/)
+          echo "/mcp/ -> $code"
+          [ "$code" = "401" ] || { echo "expected 401"; exit 1; }
+
+      # The compose file passes both of these through as empty strings, which
+      # is a case a bare `unset` never exercises: an empty value must parse as
+      # "no entries" rather than as one empty entry.
+      - name: Filesystem tools are off by default
+        run: |
+          docker compose exec -T infoguana python - <<'PY'
+          import sys
+          from app.config import Settings
+          s = Settings()
+          assert s.fs_allowlist == [], f"expected no roots, got {s.fs_allowlist}"
+          assert s.mcp_allowed_hosts == [], f"expected no hosts, got {s.mcp_allowed_hosts}"
+          from app import fs_access
+          try:
+              fs_access.read_file("/etc/passwd")
+          except Exception as e:
+              print("refused as expected:", e)
+          else:
+              sys.exit("read_file returned with an empty allowlist")
+          PY
+
+      # Always, because the logs are the only evidence of why a boot failed
+      # and the next step throws the container away.
+      - name: Container logs
+        if: always()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

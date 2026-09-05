@@ -10,6 +10,10 @@ entry below are recorded only in the commit history.
 
 ### Added
 
+- **CI builds the Docker image and boots the stack on every pull request.**
+  It renders the compose file, starts the container, and checks the web
+  routes, the MCP endpoint's 401, and that the filesystem tools are off by
+  default. Nothing previously exercised the image.
 - **Skill notes work end to end.** A `skill` note stores a SKILL.md document
   verbatim, and `context` pins it as a one-line manifest entry — name plus the
   authored trigger condition — instead of its body. An agent reads the listing,
@@ -55,6 +59,14 @@ entry below are recorded only in the commit history.
 
 ### Fixed
 
+- **`docker-compose.yml` parses under older Compose again.** `env_file` used
+  the `path:`/`required:` long form, which needs Compose v2.24+ and makes
+  earlier versions reject the entire file rather than ignore the key. It is
+  back to the short form, so `.env` must now exist — `cp .env.example .env`.
+- **Setting `INFOGUANA_PORT` no longer publishes a port with nothing behind
+  it.** The variable fed both the host side of the mapping and the app's own
+  listen port, while the mapping's target and the healthcheck stayed on 8789,
+  so any value but the default was unreachable. It is now the host port only.
 - **Clients reaching the MCP endpoint by LAN or tailnet address are no longer
   refused `421 Invalid Host header`.** The transport left its security settings
   unset to mean "no checks", but the SDK reads that as a cue to auto-enable a

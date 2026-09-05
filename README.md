@@ -47,6 +47,19 @@ past the budget, it's dropped.
   <br><br>
 </div>
 
+**Skills live in infoguana, not in a per-harness skills directory.** A
+`skill` note's body is a SKILL.md file verbatim — frontmatter and all — so
+any client that can reach the MCP server gets the project's skills with no
+harness-specific adaptation and no symlink farm per machine. Skills pin as
+a *menu, not the meals*: one `name — description` line each, the
+description being the trigger condition its author wrote rather than a
+generated preview, and the agent calls `get(id)` — or `get_skill(name)`
+when the user invoked one by name — for the body once it decides a skill
+applies. A skill runs 4-8KB; three pinned in full would spend a whole
+context budget before a single memory loaded. The manifest is exempt from
+that budget and bounded separately, because a session that can afford no
+memories still has to know which capabilities it has.
+
 **Notes form a typed graph.** Edges carry meaning: `implements`,
 `supersedes`, `references`, `caused_by`, `bundled_with`, `prerequisite_for`.
 `traverse(start_id, edge_type)` walks design provenance; `search(...,

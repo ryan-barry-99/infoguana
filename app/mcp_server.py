@@ -944,10 +944,15 @@ def infoguana_context(
 
     Active plans/tasks pin after that, then the BFS neighborhood.
 
-    The skill manifest is exempt from `budget_tokens` and carries its own
-    caps; `skills_tokens_est` reports what it cost, and `skills_truncated`
-    says whether a bound cut the listing. Budget for the notes slice and
-    read that field for the rest.
+    The pinned rules and the skill manifest are both exempt from
+    `budget_tokens` and carry their own caps, so a rule-heavy project
+    cannot crowd its own memories out. `rules_tokens_est` and
+    `skills_tokens_est` report what each cost; `rules_truncated` and
+    `skills_truncated` say whether a bound cut the listing.
+    `notes_tokens_est` is what was actually charged against the budget,
+    and `total_tokens_est` is the whole payload including the exempt
+    sections — budget for the notes slice and read the rest from those
+    fields.
 
     Each note is returned as its haiku-generated preview with
     `preview: True` set on the dict. The 4000-token budget thus surfaces a

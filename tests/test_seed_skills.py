@@ -188,17 +188,23 @@ def test_seeded_skill_renders_in_the_onboard_blob(unseeded):
 
 
 def test_manifest_cost_is_not_billed_to_the_notes_budget(unseeded):
-    """The heading prints what the BFS spent; the exempt manifest is
-    reported in its own clause. Billing it to the notes allowance is what
-    made agents report a 3x budget overrun that never happened."""
+    """The heading prints what the BFS spent; the exempt sections are
+    reported in their own clause. Billing them to the notes allowance is
+    what made agents report a 3x budget overrun that never happened.
+
+    Both exempt sections count: the manifest and the pinned rules. The
+    heading is asserted against `notes_tokens_est` rather than a
+    subtraction from the total, so it stays honest if a third exempt
+    section is ever added."""
     seed_skills.seed_if_needed(unseeded)
     ctx = graph.build_context(project="anything", budget_tokens=4000)
     blob = onboard.build(project="anything", budget_tokens=4000)
     header = next(l for l in blob.splitlines()
                   if l.startswith("## relevant memories"))
-    charged = ctx["total_tokens_est"] - ctx["skills_tokens_est"]
-    assert f"(~{charged} tokens, budget 4000" in header, header
-    assert f"adds ~{ctx['skills_tokens_est']} more, exempt" in header, header
+    exempt = ctx["rules_tokens_est"] + ctx["skills_tokens_est"]
+    assert ctx["total_tokens_est"] - exempt == ctx["notes_tokens_est"]
+    assert f"(~{ctx['notes_tokens_est']} tokens, budget 4000" in header, header
+    assert f"add ~{exempt} more, exempt" in header, header
 
 
 # --- regressions from the first review round -------------------------------

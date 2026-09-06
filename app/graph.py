@@ -113,9 +113,26 @@ def _approx_tokens(text: str) -> int:
     return max(1, len(text or "") // 4)
 
 
+# What a note costs beyond its own text once it is serialized: the JSON
+# punctuation and escaping, plus every field `_bfs_neighborhood` attaches
+# — tags, via (the whole BFS provenance path), reachability, hops,
+# timestamps, project, type, status, linked_prs, tokens_est.
+#
+# Measured, not guessed: across 1,100 notes in 26 real projects the
+# serialized cost of a BFS note dict minus its preview+description runs a
+# median of 110 tokens (p90 128). Sweeping this constant against real
+# payloads, 110 puts the median est/actual ratio at 1.00x (p10 0.89, p90
+# 1.12); the previous 20 left it at 2.34x, i.e. a caller asking for 4000
+# tokens of notes received about 9,400.
+#
+# It is a flat allowance rather than a per-field calculation because
+# `via` is the only field that varies much, and it is bounded by max_hops.
+NOTE_ENVELOPE_TOKENS = 110
+
+
 def _note_tokens(n: Note, full: bool = False) -> int:
-    """Budget estimate for a note. Default is preview-mode: the
-    haiku preview + description. With `full=True`, sizes against the actual
+    """Budget estimate for a note. Default is preview-mode: the haiku
+    preview + description. With `full=True`, sizes against the actual
     body — used only by the bounded `expand_top` slot, never as the default,
     so a greedy caller can't reintroduce the full-mode regression."""
     from app import classify  # avoid import cycle on module load
@@ -124,7 +141,7 @@ def _note_tokens(n: Note, full: bool = False) -> int:
     else:
         body = (n.preview or classify.derive_fallback_preview(n.content or "")) \
                + "\n" + (n.description or "")
-    return _approx_tokens(body) + 20
+    return _approx_tokens(body) + NOTE_ENVELOPE_TOKENS
 
 
 # --- node dicts ------------------------------------------------------------
@@ -545,9 +562,11 @@ class _ContextState:
     skills: list[dict] = field(default_factory=list)
     active_plans: list[dict] = field(default_factory=list)
     selected: list[dict] = field(default_factory=list)
-    # The skill manifest is exempt from budget_tokens and tracked
-    # separately, so `total_tokens` measures only what the BFS and the
-    # rule pin spent. See _pin_skills for why it is exempt.
+    # Rules and the skill manifest are exempt from budget_tokens and
+    # tracked separately, so `total_tokens` measures only what the BFS
+    # spent on notes. See _pin_rules and _pin_skills for why.
+    rules_tokens: int = 0
+    rules_truncated: bool = False
     skills_tokens: int = 0
     skills_truncated: bool = False
 
@@ -564,6 +583,17 @@ class _ContextState:
         from app import classify  # local to avoid module-load import cycle
         body = n.preview or classify.derive_fallback_preview(n.content or "")
         return {"content": body, "description": n.description, "preview": True}
+
+
+# Rules are exempt from budget_tokens (see _pin_rules), so this is the only
+# thing bounding them. Sized well above any realistic hand-maintained rule
+# set; reaching it means something is wrong, and it is surfaced as
+# `rules_truncated` rather than dropped quietly.
+RULES_TOKEN_CAP = 20000
+# Rules have two independent bounds and both report through
+# `rules_truncated`: this one on how many are fetched, RULES_TOKEN_CAP on
+# how much of the budget they may spend. Either can bite first.
+RULES_FETCH_LIMIT = 200
 
 
 # Skills get both bounds, but they are runaway backstops, not a ration.
@@ -597,9 +627,17 @@ def _pin_rules(state: _ContextState) -> None:
     """Pin `rule` notes (standing constraints) above everything else. Rules
     are the user's hard always-true instructions — emit with full bodies
     (not previews) since they're short and must be read, not triaged. Rules
-    don't carry a lifecycle, so no status/due-date handling. They count
-    against the budget normally so they can't crowd out everything else,
-    but they're claimed first so a tight budget doesn't drop them.
+    don't carry a lifecycle, so no status/due-date handling.
+
+    Rules are exempt from `budget_tokens`. They used to be claimed first
+    but charged against the same allowance, which failed in both
+    directions: they crowded notes out of a rule-heavy project, and once
+    the allowance ran out the loop stopped, silently dropping the rules
+    that didn't fit — the oldest project-specific ones, since the sort is
+    global-first then newest-first. A constraint the agent never sees is
+    worse than a memory it never sees, and rules are short enough that
+    exempting them is affordable. RULES_TOKEN_CAP is a backstop against a
+    runaway rule set, and hitting it is reported rather than silent.
 
     Two scopes: rules with `project=None` are *global* (apply in every
     project's context), rules with `project=<this>` are project-specific.
@@ -607,18 +645,27 @@ def _pin_rules(state: _ContextState) -> None:
     then the project-specific rules layer on top."""
     if state.type_filter is not None and "rule" not in state.type_filter:
         return
-    all_rules = db.list_notes(type="rule", limit=200)
-    scoped_rules = [
-        r for r in all_rules if r.project is None or r.project == state.project
-    ]
+    # Scope in SQL, not after the fetch: `list_notes(type=..., limit=N)`
+    # caps across every project, so filtering in Python lets a large
+    # corpus of other projects' rules evict this project's entirely.
+    scoped_rules = db.list_scoped_notes("rule", state.project,
+                                        limit=RULES_FETCH_LIMIT)
+    # The fetch limit is the other way rules go missing, and it used to do
+    # so silently — `rules_truncated` only ever meant "hit the token cap".
+    # A constraint the agent never sees is the failure this whole function
+    # is written to avoid, so both bounds report through the same flag.
+    if len(scoped_rules) >= RULES_FETCH_LIMIT:
+        state.rules_truncated = True
     # Global first, then project-specific. Within each bucket, newest first.
     scoped_rules.sort(
         key=lambda r: (0 if r.project is None else 1, -r.created_at.timestamp())
     )
     for rule in scoped_rules:
         tokens = _note_tokens(rule, full=True)
-        if not state.can_fit(tokens):
+        if state.rules_tokens + tokens > RULES_TOKEN_CAP:
+            state.rules_truncated = True
             break
+        state.rules_tokens += tokens
         state.rules.append({
             "id": rule.id,
             "content": rule.content,
@@ -631,7 +678,6 @@ def _pin_rules(state: _ContextState) -> None:
             "updated_at": rule.updated_at.isoformat(),
             "tokens_est": tokens,
         })
-        state.total_tokens += tokens
         state.seen_note_ids.add(rule.id)
 
 
@@ -961,10 +1007,17 @@ def build_context(
     return {
         "project": project,
         "budget_tokens": budget_tokens,
-        # total = the whole payload a caller renders; the skill
-        # manifest is exempt from budget_tokens but still shipped, so it
-        # is counted here and reported separately below.
-        "total_tokens_est": state.total_tokens + state.skills_tokens,
+        # total = the whole payload a caller renders; the pinned rules
+        # and the skill manifest are exempt from budget_tokens but still
+        # shipped, so they are counted here and reported separately
+        # below. `notes_tokens_est` is what was actually charged against
+        # budget_tokens — renderers should print that beside the budget,
+        # not the total, or an exempt section reads as an overrun.
+        "total_tokens_est": (state.total_tokens + state.rules_tokens
+                             + state.skills_tokens),
+        "notes_tokens_est": state.total_tokens,
+        "rules_tokens_est": state.rules_tokens,
+        "rules_truncated": state.rules_truncated,
         "rules": state.rules,
         "skills_tokens_est": state.skills_tokens,
         "skills_truncated": state.skills_truncated,

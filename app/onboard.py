@@ -119,12 +119,20 @@ def build(project: str, budget_tokens: int = 4000) -> str:
 
     The harness caps each hook's `additionalContext` at ~2KB
     inline, but the cap is *per-hook*, not aggregate. The install script
-    therefore registers N (default 16) UserPromptSubmit hook entries that
-    each fetch a different line-aligned slice of this blob via
+    therefore registers N SessionStart hook entries that each fetch a
+    different line-aligned slice of this blob via
     /onboard/<project>/chunk/<i>?of=<n>; all N slices land inline at
     session start with no truncation. So this function still produces
     the full blob — protocol intro included — and chunking happens at
-    the route layer."""
+    the route layer.
+
+    N is derived from measured blob size at install time rather than
+    hardcoded, because the blob outgrew every fixed value it was ever
+    given: a 16-chunk split was sized when this produced ~22KB, and by
+    the time the largest project's rule set reached ~38KB each slice was
+    ~3.7KB against a ~2KB cap — roughly the back half of all sixteen
+    was being dropped, silently and mid-rule. See
+    routes/onboard.chunks_needed and _chunks_fitting."""
     protocol = db.get_protocol("default") or ""
     proj_meta = db.get_project(project)
     project_desc = (proj_meta or {}).get("description") or ""
@@ -233,24 +241,123 @@ def build(project: str, budget_tokens: int = 4000) -> str:
         for r in project_rules:
             _emit_rule(r)
 
-    # The skill manifest is exempt from budget_tokens but still shipped,
-    # so `total_tokens_est` includes it. Printing that figure beside the
-    # budget under a heading that says "relevant memories" bills an exempt
-    # section to the notes allowance and reads as an overrun. The exempt
-    # cost is real and worth showing — it just isn't this budget's.
-    exempt = ctx.get("skills_tokens_est", 0)
+    # Rules going missing is the failure the pin exists to prevent, so say
+    # so in the blob rather than only in the context payload — nothing was
+    # rendering `rules_truncated`, which made a dropped constraint look
+    # exactly like a project that never had one.
+    # The recovery call must be one that can actually recover them.
+    # `context(include_types=['rule'])` cannot: RULES_TOKEN_CAP is applied
+    # unconditionally inside `_pin_rules`, not relaxed by the type filter
+    # and not derived from budget_tokens, so that call returns the
+    # identical truncated set. An agent told to check, checking, and
+    # seeing the same list concludes nothing is missing — worse than
+    # silence, because now it believes it verified.
+    # No `and rules exist` guard: truncation-to-zero is the case that most
+    # needs saying, and it's the one a guard on the rendered list would
+    # suppress. With no truncation this never fires regardless.
+    if ctx.get("rules_truncated"):
+        parts.append(
+            "\n_Some rules were dropped from this listing — it hit a size "
+            "bound. Call `search(type='rule', project=...)` to read the full "
+            "set before acting on anything constraint-shaped._\n"
+        )
+
+    # Pinned tracked work. This section exists because the protocol text
+    # promises it ("Pending plans and tasks for this project are pinned to
+    # the top of context output") and because `_pin_active_work` charges
+    # every one of these against `budget_tokens` and adds it to
+    # `seen_note_ids` — so before this was rendered, the blob paid for the
+    # plans AND suppressed them from the BFS, spending budget on content
+    # it did not contain. Measured on the heaviest project at the 4000
+    # default: 2,275 tokens, 57% of the notes budget, for 16 plans whose
+    # bodies appeared nowhere.
+    #
+    # Rendered before the memories, matching the order the budget is spent
+    # in and the priority the protocol claims.
+    active = ctx.get("active_plans") or []
+    if active:
+        parts.append(
+            f"\n## pending plans and tasks for `{project}` "
+            f"(~{sum(p.get('tokens_est', 0) for p in active)} tokens)\n"
+        )
+        parts.append(
+            "\nCheck these before starting new work. Call "
+            "`plan_complete(id=...)` when one finishes so it stops pinning "
+            "here; `get(id)` for the full body.\n"
+        )
+        for p in active:
+            due = ""
+            if p.get("due_state"):
+                days = p.get("due_in_days")
+                when = p.get("due_date")
+                if p["due_state"] == "overdue" and isinstance(days, int):
+                    due = f" · **overdue {abs(days)}d** (due {when})"
+                elif p["due_state"] == "today":
+                    due = " · **due today**"
+                elif when:
+                    due = f" · due {when}"
+            tags = " ".join(f"#{t}" for t in p.get("tags") or [])
+            head = f"\n- **#{p['id']}** ({p.get('type', 'plan')}"
+            if p.get("status"):
+                head += f", {p['status']}"
+            parts.append(head + ")" + due + (f" · {tags}" if tags else ""))
+            body = (p.get("content") or "").strip()
+            if body:
+                parts.append(f"\n  {body}")
+        parts.append("\n")
+
+    # Report what this section actually cost, not the whole payload.
+    # `total_tokens_est` includes the pinned rules and the skill manifest,
+    # which are exempt from budget_tokens — printing it beside the budget
+    # under a heading that says "relevant memories" bills the exempt
+    # sections to the notes allowance and reads as a 3x overrun. Agents
+    # believed it and reported it: one session summarized its own context
+    # as "~13k tokens of recalled notes (against a 4k budget)" when the
+    # notes were 3,974 of 4,000 and the other 9,462 was exempt rules plus
+    # manifest. The exempt cost is real and worth showing — it just isn't
+    # this budget's, so it goes in its own clause.
+    exempt = ctx.get("rules_tokens_est", 0) + ctx.get("skills_tokens_est", 0)
     header = (
         f"\n## relevant memories from infoguana "
-        f"(~{ctx['total_tokens_est'] - exempt} tokens, budget {budget_tokens}"
+        f"(~{ctx.get('notes_tokens_est', 0)} tokens, budget {budget_tokens}"
     )
     if exempt:
         header += (
-            f"; the skills listing above adds ~{exempt} more, exempt from "
+            f"; the rules and skills above add ~{exempt} more, exempt from "
             f"that budget"
         )
     parts.append(header + ")\n")
     notes = ctx.get("notes") or []
-    if not notes:
+    # An empty note list has two very different causes, and the reader
+    # can't tell them apart from the output: the project genuinely has
+    # nothing saved, or the pins ate the budget before any note could be
+    # considered. Treat "nearly all of the budget already spent" as the
+    # latter — a note that doesn't fit in the remainder is
+    # indistinguishable from one that was never there.
+    # Only what the BFS charged for notes counts here — rules and skills
+    # are exempt from the budget, so including their cost would report a
+    # rule-heavy project as crowded-out when its notes were never
+    # squeezed at all.
+    spent = ctx.get("notes_tokens_est", ctx.get("total_tokens_est", 0))
+    crowded_out = spent >= budget_tokens * 0.9
+    if not notes and crowded_out:
+        # `spent` is notes_tokens_est, and the only pin still charging it
+        # before the BFS reaches a note is _pin_active_work — rules and
+        # skills accumulate against their own exempt counters. So active
+        # work is what crowded the notes out here, and naming the rules
+        # (as this message used to) pointed at the one section guaranteed
+        # not to be responsible. Saying "no memories yet" would be a lie
+        # the reader can't check — distinguish the causes and name the fix.
+        parts.append(
+            f"\n_No memories fit: pinned active work already cost "
+            f"~{spent} of the {budget_tokens}-token "
+            f"budget. This project may well have memories — they were "
+            f"crowded out, not absent. Call `context(project=..., "
+            f"budget_tokens={max(budget_tokens * 2, 8000)})` to read them, and "
+            f"raise INFOGUANA_ONBOARD_BUDGET so future sessions include them "
+            f"inline._\n"
+        )
+    elif not notes:
         parts.append(
             "\n_No relevant memories yet. As you learn things in this project, "
             "call `add(content=..., project=...)` to start populating it._\n"

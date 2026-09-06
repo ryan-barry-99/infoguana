@@ -45,6 +45,24 @@ entry below are recorded only in the commit history.
 
 ### Changed
 
+- **Pinned rules are exempt from `budget_tokens`, like the skill manifest.**
+  Charged against it, they crowded a rule-heavy project's own memories out,
+  and rules past the allowance were dropped silently. They now carry their own
+  caps and report through `rules_truncated`.
+- **`context` reports its budget in parts.** `notes_tokens_est` is what was
+  charged, `rules_tokens_est` and `skills_tokens_est` are the exempt sections,
+  and `total_tokens_est` is the whole payload. The onboard header prints the
+  charged figure, which previously read as a threefold overrun.
+- **The onboard blob renders pinned plans and tasks.** They were already
+  charged against the budget and suppressed from the memory listing, so the
+  blob paid for content it did not contain. An empty memory list now also says
+  whether it was crowded out rather than genuinely empty.
+- **Per-note budget sizing allows 110 tokens of serialization envelope**
+  instead of 20. The old figure ignored the metadata every note carries, so a
+  caller asking for 4,000 tokens of notes received roughly 9,400.
+- The rule pin scopes in SQL via `list_scoped_notes` rather than fetching every
+  project's rules and filtering in Python. The old path applied its cap across
+  the whole corpus, so a large set elsewhere could evict this project's rules.
 - **The skill manifest is exempt from `budget_tokens`.** A session that can
   afford no memories still has to know which capabilities it has. It carries
   its own caps instead, and the onboard header reports the exempt cost in a

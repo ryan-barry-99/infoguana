@@ -8,6 +8,8 @@ entry below are recorded only in the commit history.
 
 ## Unreleased
 
+## v1.0.0 — 2026-09-06
+
 ### Added
 
 - **Classification can run against any OpenAI-compatible endpoint.** Set

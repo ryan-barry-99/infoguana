@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="infoguana", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="infoguana", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 app.include_router(views.router)

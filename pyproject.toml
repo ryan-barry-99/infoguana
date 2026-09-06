@@ -1,6 +1,6 @@
 [project]
 name = "infoguana"
-version = "0.2.0"
+version = "1.0.0"
 description = "Infoguana — cross-project memory for LLM agents with hybrid retrieval and MCP integration"
 readme = "README.md"
 license = { text = "MIT" }

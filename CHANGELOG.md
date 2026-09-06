@@ -10,6 +10,20 @@ entry below are recorded only in the commit history.
 
 ### Added
 
+- **Classification can run against any OpenAI-compatible endpoint.** Set
+  `INFOGUANA_CLASSIFY_BASE_URL` (LM Studio, Ollama, vLLM, OpenAI) and notes are
+  typed and tagged over HTTP instead of by shelling out to the Claude CLI.
+  Without it a headless or Codex-only install had no classifier at all, so
+  every note landed `unsorted`.
+- **`scripts/reseed-protocol.py` updates the seeded memory protocol in place.**
+  The protocol row is written once at first boot and then owned by the user, so
+  existing installs kept the old wording until someone edited it in the web UI.
+  Supports `--diff` and `--print`, and confirms before writing.
+- **`scripts/classify-eval.py` scores a classifier backend against your own
+  notes.** It replays existing notes through a configured endpoint and reports
+  per-field agreement, which is the only practical way to tell whether a small
+  local model is good enough before switching to it.
+
 - **CI builds the Docker image and boots the stack on every pull request.**
   It renders the compose file, starts the container, and checks the web
   routes, the MCP endpoint's 401, and that the filesystem tools are off by
@@ -45,6 +59,11 @@ entry below are recorded only in the commit history.
 
 ### Changed
 
+- **The NAS backup mirror no longer aborts against a network share.** rsync ran
+  with `-a`, which preserves permissions and ownership that CIFS/SMB cannot
+  honor; it failed to chmod its temp file, could not rename it into place, and
+  aborted mid-run leaving the mirror incomplete. It now runs `-rlt --inplace`
+  with permission preservation off.
 - **Pinned rules are exempt from `budget_tokens`, like the skill manifest.**
   Charged against it they exhausted the allowance, so every project silently
   lost half its global rules, all of its project-specific ones, and its

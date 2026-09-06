@@ -13,6 +13,20 @@ class Settings(BaseSettings):
     classify_model: str = "claude-haiku-4-5"
     embed_model: str = "BAAI/bge-small-en-v1.5"
 
+    # Classification backend. Set classify_base_url to an OpenAI-compatible
+    # /v1 endpoint (LM Studio, Ollama, OpenAI, vLLM) to classify over HTTP
+    # instead of shelling out to the Claude CLI — the CLI is only present on
+    # machines running Claude Code, so a Codex-only or headless install has
+    # no classifier without this. Set classify_model to a model the endpoint
+    # actually serves (e.g. 'gemma-2-9b-it'), since the default names a
+    # Claude model. Leave the URL unset to keep the CLI path.
+    #
+    #   INFOGUANA_CLASSIFY_BASE_URL=http://127.0.0.1:1234/v1
+    #   INFOGUANA_CLASSIFY_MODEL=gemma-2-9b-it
+    classify_base_url: str | None = None
+    classify_api_key: str | None = None  # unset is fine for local servers
+    classify_timeout: float = 180.0
+
     backup_dir: Path = Path("./backups")
     backup_interval_hours: float = 0.25
     backup_retain: int = 30

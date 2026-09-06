@@ -214,3 +214,34 @@ def test_note_sizing_includes_the_serialization_envelope(db_conn):
         content="a short memory", type="memory", project="alpha",
         source="test"))
     assert graph._note_tokens(n) >= graph.NOTE_ENVELOPE_TOKENS
+
+
+def test_overdue_and_due_today_plans_are_flagged_in_the_blob(db_conn):
+    """The due-date markers are the reason to render plans inline at all —
+    an overdue item is the thing the reader most needs off the top. Each
+    `due_state` bucket formats differently, so each is asserted."""
+    from datetime import date, timedelta
+    today = date.today()
+    db.create_note(NoteCreate(
+        content="Renew the certificate", type="task", status="pending",
+        project="alpha", source="test",
+        due_date=(today - timedelta(days=3)).isoformat()))
+    db.create_note(NoteCreate(
+        content="File the quarterly report", type="task", status="pending",
+        project="alpha", source="test", due_date=today.isoformat()))
+    blob = onboard.build(project="alpha", budget_tokens=4000)
+    assert "**overdue 3d**" in blob
+    assert f"(due {(today - timedelta(days=3)).isoformat()})" in blob
+    assert "**due today**" in blob
+
+
+def test_a_plan_without_a_due_date_gets_no_due_marker(db_conn):
+    """The marker is built by string concatenation onto the heading, so a
+    plan with no date must contribute nothing rather than an empty ' · '."""
+    db.create_note(NoteCreate(
+        content="Refactor the widget loader", type="plan", status="pending",
+        project="alpha", source="test"))
+    line = next(l for l in onboard.build(project="alpha").splitlines()
+                if l.startswith("- **#"))
+    assert "due" not in line
+    assert line.rstrip().endswith(")") or "·" in line

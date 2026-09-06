@@ -634,13 +634,13 @@ def infoguana_get_skill(name: str, project: Optional[str] = None) -> dict:
 
     The manifest in `context` lists each skill as `name (#id)`, and `get(id)`
     works fine when you are holding that listing. This is for when you are
-    not: the user typed `/brain-review`, a rule or another note referred to a
+    not: the user typed `/code-review`, a rule or another note referred to a
     skill by name, or your context was summarized and the ids went with it.
     A name is the skill's stable identity — ids are not portable across
     installs and do not survive a note being re-added.
 
     Matching is exact after a light fold — case, spaces/underscores vs
-    hyphens, and a leading `/` — so `/Brain_Review` and `brain-review` both
+    hyphens, and a leading `/` — so `/Code_Review` and `code-review` both
     resolve. Nothing fuzzier: a wrong skill followed confidently is worse
     than a miss, and a miss returns `suggestions` with the near names.
 
@@ -658,7 +658,7 @@ def infoguana_get_skill(name: str, project: Optional[str] = None) -> dict:
     `description`, and `scope`.
 
     Args:
-        name: The skill's frontmatter name, e.g. 'brain-review'.
+        name: The skill's frontmatter name, e.g. 'code-review'.
         project: Project scope to search alongside the globals. Omit to
             search every project.
     """

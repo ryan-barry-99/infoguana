@@ -278,5 +278,8 @@ def test_the_manifest_admits_a_large_skill_corpus(unseeded):
     ctx = graph.build_context(project="anything", budget_tokens=4000)
     assert len(ctx["skills"]) == 250
     assert ctx["skills_truncated"] is False
-    # And the notes budget is untouched by a manifest this size.
-    assert ctx["total_tokens_est"] - ctx["skills_tokens_est"] <= 4000
+    # And the notes budget is untouched by a manifest this size. Asserted
+    # against `notes_tokens_est` rather than a subtraction from the total,
+    # which now also carries the exempt rules — that form passes here only
+    # because this fixture has none, and would break on a fixture that did.
+    assert ctx["notes_tokens_est"] <= 4000

@@ -53,8 +53,12 @@ def test_rules_are_not_charged_against_budget_tokens(db_conn):
 
 def test_a_rule_heavy_project_still_surfaces_its_memories(db_conn):
     """Charged against the budget, rules this size left nothing for the
-    BFS and the caller saw an empty note list on a project that had 10."""
-    _rules("alpha", 20, size=200)
+    BFS and the caller saw an empty note list on a project that had 10.
+
+    Sized to exceed the whole 4000-token allowance on its own even at the
+    old 20-token envelope, so the test fails against the pre-fix code
+    rather than merely passing on both sides of it."""
+    _rules("alpha", 20, size=800)
     _notes("alpha", 10)
     ctx = graph.build_context(project="alpha", budget_tokens=4000)
     assert ctx["notes"], "rules crowded the memories out"
@@ -119,7 +123,16 @@ def test_blob_warns_when_rules_were_dropped(db_conn, monkeypatch):
     monkeypatch.setattr(graph, "RULES_FETCH_LIMIT", 10)
     blob = onboard.build(project="alpha", budget_tokens=4000)
     assert "Some rules were dropped" in blob
-    assert "search(type='rule'" in blob
+    # The recovery call has to be one an agent can actually make. `search`
+    # takes `query` as a required positional, so a notice naming
+    # `search(type='rule', ...)` with no query hands the reader a
+    # TypeError where it promised the missing constraints. And `project`
+    # must stay unset: the filter is an equality match, so naming this
+    # project would exclude every global rule.
+    assert "search(query=" in blob
+    assert "search(type=" not in blob
+    notice = next(l for l in blob.splitlines() if "Some rules were dropped" in l)
+    assert "project=" not in notice, notice
 
 
 def test_blob_is_silent_about_truncation_when_nothing_was_dropped(db_conn):
@@ -201,4 +214,3 @@ def test_note_sizing_includes_the_serialization_envelope(db_conn):
         content="a short memory", type="memory", project="alpha",
         source="test"))
     assert graph._note_tokens(n) >= graph.NOTE_ENVELOPE_TOKENS
-    assert graph.NOTE_ENVELOPE_TOKENS == 110

@@ -255,11 +255,22 @@ def build(project: str, budget_tokens: int = 4000) -> str:
     # No `and rules exist` guard: truncation-to-zero is the case that most
     # needs saying, and it's the one a guard on the rendered list would
     # suppress. With no truncation this never fires regardless.
+    # No tool returns a project's full rule set inline, so the notice
+    # must not promise one. `search` takes `query` as a required
+    # positional, so a call without it is a TypeError before it reaches
+    # the server; its `project` filter is an equality match, so passing
+    # this project drops every global rule — and globals sort first, so
+    # they are the ones most likely still in the listing. `search` also
+    # returns previews, hence the second call for the bodies the pin
+    # would have emitted in full.
     if ctx.get("rules_truncated"):
         parts.append(
             "\n_Some rules were dropped from this listing — it hit a size "
-            "bound. Call `search(type='rule', project=...)` to read the full "
-            "set before acting on anything constraint-shaped._\n"
+            "bound. No tool returns the full set inline: call "
+            "`search(query='<what you are about to do>', type='rule', "
+            "limit=50)` with `project` left unset so globals are included, "
+            "then `get_many` the hits to read the bodies, before acting on "
+            "anything constraint-shaped._\n"
         )
 
     # Pinned tracked work. This section exists because the protocol text

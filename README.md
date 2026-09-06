@@ -176,6 +176,13 @@ python scripts/install-infoguana-mcp.py      # wires it into ~/.claude.json
 docker compose exec infoguana claude /login  # optional: enables auto-classification
 ```
 
+Auto-classification needs a backend, and there are two. The `claude
+/login` above is one; the other is any OpenAI-compatible endpoint, set
+with `INFOGUANA_CLASSIFY_BASE_URL` in `.env` (see `.env.example`). The
+second is the path for an install with no Claude CLI on the host —
+without either, notes are still saved, but they land untyped and
+untagged.
+
 On Linux/macOS, use `python3` if `python` isn't on your PATH.
 
 No `.env` *editing* required — every setting has a default. The file does
@@ -414,8 +421,9 @@ regenerates its block.
 
 ## Wire up a project
 
-For each project where Claude Code should use infoguana, drop a small
-`CLAUDE.md` that tells the agent to consult infoguana on every task.
+For each project where your agent should use infoguana, drop a small
+instruction file that tells it to consult infoguana on every task —
+`CLAUDE.md` for Claude Code, `AGENTS.md` for Codex.
 There are two ways to put one in place, depending on whether you want
 the file committed or kept user-private:
 

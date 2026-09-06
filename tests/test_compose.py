@@ -1,18 +1,18 @@
 """Invariants in `docker-compose.yml` that only a container would otherwise catch.
 
-Both checks here are regressions that shipped: a schema older Compose could
-not parse, and a port variable used for two incompatible purposes. The CI
-docker job builds and boots the real thing, which is the authoritative check;
-these exist because that job takes minutes and these take milliseconds, and a
-misrendered port is cheap to reintroduce.
+Two of the three cover regressions that shipped: a schema older Compose could
+not parse, and a port variable used for two incompatible purposes. The third
+pins the mapping target and healthcheck against a future edit and passes
+against both versions. The CI docker job builds and boots the real thing and
+is the authoritative check; these exist because it takes minutes and they take
+milliseconds, and a misrendered port is cheap to reintroduce.
 """
 from __future__ import annotations
 
 import pathlib
 
 import pytest
-
-yaml = pytest.importorskip("yaml")
+import yaml
 
 COMPOSE = pathlib.Path(__file__).resolve().parent.parent / "docker-compose.yml"
 

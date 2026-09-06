@@ -1,6 +1,10 @@
 services:
   infoguana:
     build: .
+    # Names the image `build:` produces. Without it compose derives a name
+    # from the project directory, so a separately-built image (CI builds one
+    # with the layer cache) is ignored and `up` silently rebuilds its own.
+    image: infoguana:latest
     container_name: infoguana
     restart: unless-stopped
     ports:

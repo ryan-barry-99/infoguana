@@ -162,8 +162,8 @@ in a different repo — sees that knowledge surface again.
 
 ## Quick start (Docker)
 
-Requires Docker Compose **2.24+** (bundled with Docker Desktop 4.27+) and
-Python 3.10+ on the host. Works on Linux, macOS, and Windows.
+Requires Docker with Compose (v2 recommended — it is what CI builds and
+boots) and Python 3.10+ on the host. Works on Linux, macOS, and Windows.
 
 ```bash
 git clone <this repo> infoguana && cd infoguana
@@ -479,6 +479,13 @@ entrypoint writes that file as it starts up. The installer waits up to 5
 seconds for it to appear. If the host filesystem is slow (e.g. a network
 share, WSL2 on a network drive), give it more time and re-run the
 installer. The script is idempotent.
+
+**`Couldn't find env file: .../.env`.** Compose reads `.env` and will not
+start without it. Every setting has a default, so the file may be empty:
+
+```bash
+cp .env.example .env
+```
 
 **`docker compose logs infoguana` shows an old error after a rebuild.**
 Compose can hold stale container state between rebuilds, especially when

@@ -39,6 +39,7 @@ root to override defaults — see [`.env.example`](.env.example).
 For Docker-based development:
 
 ```bash
+cp .env.example .env   # required: compose reads this file
 docker compose up -d --build
 docker compose logs -f infoguana
 ```

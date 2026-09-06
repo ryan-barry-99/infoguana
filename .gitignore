@@ -22,3 +22,6 @@ claude-config/
 .DS_Store
 .idea/
 .vscode/
+
+# Coverage artifact from local pytest --cov runs.
+.coverage

@@ -1,18 +1,29 @@
 services:
   infoguana:
     build: .
+    # Names the image `build:` produces. Without it compose derives a name
+    # from the project directory, so a separately-built image (CI builds one
+    # with the layer cache) is ignored and `up` silently rebuilds its own.
+    image: infoguana:latest
     container_name: infoguana
     restart: unless-stopped
     ports:
       - "${INFOGUANA_PORT:-8789}:8789"
     # Every setting below has a default. Drop overrides into .env to change
     # them — the env_file directive below loads it into the container.
+    # Short form on purpose: the `path:`/`required:` long form needs Compose
+    # v2.24+, and older Compose rejects the whole file rather than degrading.
+    # The cost is that .env must exist; `cp .env.example .env` covers it, and
+    # both README and DEPLOY.md name that as a setup step.
     env_file:
-      - path: .env
-        required: false
+      - .env
     environment:
       INFOGUANA_HOST: ${INFOGUANA_HOST:-0.0.0.0}
-      INFOGUANA_PORT: ${INFOGUANA_PORT:-8789}
+      # Fixed, not ${INFOGUANA_PORT}: that variable is the HOST side of the
+      # ports mapping above, whose container side and the healthcheck below
+      # are both 8789. Substituting it here moved the listener without moving
+      # them, so any value but the default published a port nothing served.
+      INFOGUANA_PORT: 8789
       INFOGUANA_DB_PATH: ${INFOGUANA_DB_PATH:-/data/infoguana.db}
       INFOGUANA_BACKUP_DIR: ${INFOGUANA_BACKUP_DIR:-/backups}
       INFOGUANA_CLAUDE_BIN: ${INFOGUANA_CLAUDE_BIN:-claude}

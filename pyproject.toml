@@ -35,6 +35,10 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # tests/test_compose.py parses docker-compose.yml. It arrives transitively
+    # today via uvicorn's standard extra; declared here so the suite does not
+    # depend on that staying true.
+    "pyyaml>=6.0",
 ]
 
 [tool.pytest.ini_options]

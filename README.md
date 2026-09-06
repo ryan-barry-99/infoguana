@@ -162,11 +162,12 @@ in a different repo — sees that knowledge surface again.
 
 ## Quick start (Docker)
 
-Requires Docker Compose **2.24+** (bundled with Docker Desktop 4.27+) and
-Python 3.10+ on the host. Works on Linux, macOS, and Windows.
+Requires Docker with Compose (v2 recommended — it is what CI builds and
+boots) and Python 3.10+ on the host. Works on Linux, macOS, and Windows.
 
 ```bash
 git clone <this repo> infoguana && cd infoguana
+cp .env.example .env                         # required: compose reads this file
 docker compose up -d --build
 python scripts/install-infoguana-mcp.py      # wires it into ~/.claude.json
 docker compose exec infoguana claude /login  # optional: enables auto-classification
@@ -174,7 +175,9 @@ docker compose exec infoguana claude /login  # optional: enables auto-classifica
 
 On Linux/macOS, use `python3` if `python` isn't on your PATH.
 
-No `.env` editing required — the container generates an MCP bearer on
+No `.env` *editing* required — every setting has a default. The file does
+have to exist, which is what the `cp` above is for; compose reads it and
+refuses to start if it is missing. The container generates an MCP bearer on
 first start, persists it under `./data/.mcp_secret`, and writes a
 ready-to-paste `./data/mcp.json`. The installer merges that snippet into
 `~/.claude.json` (idempotent; preserves your other `mcpServers` entries;
@@ -184,6 +187,7 @@ If you're running infoguana on a different host than your Claude Code
 machine, point the generated snippet at the right hostname:
 
 ```bash
+cp .env.example .env                         # if you have not already
 INFOGUANA_PUBLIC_HOST=infoguana.example.com docker compose up -d --build
 python scripts/install-infoguana-mcp.py
 ```
@@ -475,6 +479,13 @@ entrypoint writes that file as it starts up. The installer waits up to 5
 seconds for it to appear. If the host filesystem is slow (e.g. a network
 share, WSL2 on a network drive), give it more time and re-run the
 installer. The script is idempotent.
+
+**`Couldn't find env file: .../.env`.** Compose reads `.env` and will not
+start without it. Every setting has a default, so the file may be empty:
+
+```bash
+cp .env.example .env
+```
 
 **`docker compose logs infoguana` shows an old error after a rebuild.**
 Compose can hold stale container state between rebuilds, especially when

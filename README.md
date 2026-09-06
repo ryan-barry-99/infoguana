@@ -229,7 +229,9 @@ infoguana context directly into the agent's first turn, so architecture,
 open work and hard rules are visible inline before answering anything.
 At the default 4000-token budget that is roughly 25 note previews
 alongside the rules and the skill manifest, which are sent in full and
-are exempt from that budget.
+are exempt from that budget. Budget for the first turn accordingly: the
+whole pack measures 10k-20k tokens on a real corpus, most of it the
+rules, so the 4000 bounds the memories rather than the injection.
 
 ```bash
 python scripts/install-infoguana-hooks.py

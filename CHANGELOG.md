@@ -46,9 +46,15 @@ entry below are recorded only in the commit history.
 ### Changed
 
 - **Pinned rules are exempt from `budget_tokens`, like the skill manifest.**
-  Charged against it, they crowded a rule-heavy project's own memories out,
-  and rules past the allowance were dropped silently. They now carry their own
-  caps and report through `rules_truncated`.
+  Charged against it they exhausted the allowance, so every project silently
+  lost half its global rules, all of its project-specific ones, and its
+  memories — the sort is global-first, so the project's own rules were always
+  the casualty. Rules now carry their own caps and report through
+  `rules_truncated`.
+- **Re-run the installer after upgrading.** Sessions now receive the rules and
+  memories that were previously dropped, which roughly triples the onboard
+  blob, and the SessionStart slice count is derived at install time. An install
+  sized against the old blob delivers only the first third of the new one.
 - **`context` reports its budget in parts.** `notes_tokens_est` is what was
   charged, `rules_tokens_est` and `skills_tokens_est` are the exempt sections,
   and `total_tokens_est` is the whole payload. The onboard header prints the

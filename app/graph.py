@@ -586,10 +586,24 @@ class _ContextState:
 
 
 # Rules are exempt from budget_tokens (see _pin_rules), so this is the only
-# thing bounding them. Sized well above any realistic hand-maintained rule
-# set; reaching it means something is wrong, and it is surfaced as
+# thing bounding them. It is a backstop against a runaway rule set, not a
+# ration — reaching it means something is wrong, and it is surfaced as
 # `rules_truncated` rather than dropped quietly.
-RULES_TOKEN_CAP = 20000
+#
+# Sized against the real corpus rather than guessed. The heaviest project
+# measured needs 18,319 tokens to carry its full rule set — a normal
+# hand-maintained set, not a pathological one — so a cap anywhere near
+# that would silently reintroduce the truncation this exemption exists to
+# fix, just at a higher threshold. 40,000 leaves better than 2x headroom
+# over today's worst case.
+#
+# The real ceiling is the SessionStart transport, not this constant. The
+# blob is delivered as at most routes/onboard.MAX_CHUNKS line-aligned
+# slices of CHUNK_TARGET_BYTES each (~217 KB total), and rules serialize
+# at roughly 3.3 bytes per estimated token, so a rule set at this cap
+# occupies ~133 KB of that. Raising this much further starts competing
+# with the memories for delivery rather than for budget.
+RULES_TOKEN_CAP = 40000
 # Rules have two independent bounds and both report through
 # `rules_truncated`: this one on how many are fetched, RULES_TOKEN_CAP on
 # how much of the budget they may spend. Either can bite first.

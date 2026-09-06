@@ -155,8 +155,8 @@ def normalize_name(name: str) -> str:
     """Fold a skill name to its lookup key.
 
     Names are authored kebab-case, but they get *invoked* in whatever
-    shape the caller has to hand: `/brain-review` from a slash command,
-    `Brain Review` read out of prose, `brain_review` typed from memory.
+    shape the caller has to hand: `/code-review` from a slash command,
+    `Code Review` read out of prose, `code_review` typed from memory.
     All three name the same skill, so all three fold to one key.
 
     The fold is deliberately narrow — case, whitespace/underscore

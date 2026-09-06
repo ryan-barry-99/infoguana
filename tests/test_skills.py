@@ -121,9 +121,9 @@ def test_alias_guard_does_not_reject_ordinary_frontmatter():
     """The guard must be free for real files — every real SKILL.md must
     still parse, or the fix is worse than the bug."""
     fields = skills.parse_frontmatter(
-        "---\nname: brain-review\ndescription: Run a review.\n"
+        "---\nname: code-review\ndescription: Run a review.\n"
         "allowed-tools: Read, Grep\n---\n")
-    assert fields["name"] == "brain-review"
+    assert fields["name"] == "code-review"
     assert fields["allowed-tools"] == "Read, Grep"
 
 
@@ -219,16 +219,16 @@ def test_first_paragraph_of_nothing_is_empty():
 # --------------------------------------------------------------------
 
 @pytest.mark.parametrize("given", [
-    "brain-review", "Brain Review", "brain_review", "/brain-review",
-    "/Brain_Review", "  BRAIN-REVIEW  ",
+    "code-review", "Code Review", "code_review", "/code-review",
+    "/Code_Review", "  CODE-REVIEW  ",
 ])
 def test_names_fold_to_one_key(given):
-    assert skills.normalize_name(given) == "brain-review"
+    assert skills.normalize_name(given) == "code-review"
 
 
 def test_fold_is_narrow_enough_to_keep_distinct_names_distinct():
     assert skills.normalize_name("deploy") != skills.normalize_name("deploys")
-    assert skills.normalize_name("brain-review") != skills.normalize_name("brainreview")
+    assert skills.normalize_name("code-review") != skills.normalize_name("codereview")
 
 
 def test_empty_name_folds_to_empty_and_matches_nothing():
@@ -249,13 +249,13 @@ def test_find_by_name_returns_every_scope_that_matches():
 
 
 def test_suggest_names_returns_authored_form_not_the_fold():
-    notes = [make_note("---\nname: brain-review\n---\n"),
-             make_note("---\nname: brain-pr\n---\n", id=2)]
-    assert "brain-review" in skills.suggest_names(notes, "brain-reviwe")
+    notes = [make_note("---\nname: code-review\n---\n"),
+             make_note("---\nname: draft-pr\n---\n", id=2)]
+    assert "code-review" in skills.suggest_names(notes, "code-reviwe")
 
 
 def test_suggest_names_is_empty_for_nothing_close():
-    notes = [make_note("---\nname: brain-review\n---\n")]
+    notes = [make_note("---\nname: code-review\n---\n")]
     assert skills.suggest_names(notes, "wholly-unrelated-thing") == []
 
 
@@ -331,16 +331,16 @@ def test_a_realistic_skill_document_round_trips():
     """The shape this module exists for, end to end."""
     body = (
         "---\n"
-        "name: brain-review\n"
+        "name: code-review\n"
         "description: Run a project-aware code review of a branch or PR. "
-        "Use when the user invokes /brain-review or asks for one.\n"
+        "Use when the user invokes /code-review or asks for one.\n"
         "---\n\n"
-        "# brain-review\n\n"
+        "# code-review\n\n"
         "Long instructions the manifest must never carry.\n"
     )
     note = make_note(body, id=778)
     name, description = skills.describe(note)
-    assert name == "brain-review"
+    assert name == "code-review"
     assert description.startswith("Run a project-aware code review")
     assert "Use when the user invokes" in description, (
         "the trigger list is the part the manifest exists to carry")
@@ -348,8 +348,8 @@ def test_a_realistic_skill_document_round_trips():
     # The preview is the summary half only; the manifest keeps the whole
     # description, trigger list included.
     assert skills.preview_line(note) == (
-        "brain-review — Run a project-aware code review of a branch or PR.")
-    assert skills.find_by_name([note], "/brain-review") == [note]
+        "code-review — Run a project-aware code review of a branch or PR.")
+    assert skills.find_by_name([note], "/code-review") == [note]
 
 
 def test_yaml_is_the_parser_not_a_hand_rolled_one():

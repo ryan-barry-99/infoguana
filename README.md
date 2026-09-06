@@ -4,11 +4,13 @@
 
 Iguanas are ectotherms that depend on external heat to function.
 Infoguana — *info* + *iguana* — gives LLM agents the same kind of
-external lifeline: a cross-project second brain with typed-graph notes,
+external lifeline: a cross-project memory with typed-graph notes,
 hybrid retrieval, and MCP integration. FastAPI + SQLite (with
 sqlite-vec + FTS5) + HTMX UI + MCP. Captures notes from phone/laptop,
-classifies them via Claude Code CLI, and serves them to project-local
-Claude agents over MCP so each agent is backed by a bigger shared memory.
+classifies them through the Claude CLI or any OpenAI-compatible endpoint,
+and serves them to any MCP-capable agent — Claude Code and Codex both
+ship with an installer — so every agent, in every repository, is backed
+by the same shared memory.
 
 ## How it works
 
@@ -29,7 +31,8 @@ an agent can triage 20 results for a few hundred tokens and only pull full
 bodies (`get` / `get_many` / `expand_top=N`) for the ones worth quoting.
 
 **SessionStart loads a layered, token-budgeted context pack.** On a new
-Claude Code session, the hook packs the agent's first turn with: a
+session — Claude Code or Codex, both ship a hook — the agent's first
+turn is packed with: a
 **skill manifest** (one line per available skill — name, id, and trigger
 condition — exempt from the token budget, with bodies fetched by id on
 demand), **global-scope rules** (cross-project guidance the agent must follow
@@ -173,6 +176,13 @@ python scripts/install-infoguana-mcp.py      # wires it into ~/.claude.json
 docker compose exec infoguana claude /login  # optional: enables auto-classification
 ```
 
+Auto-classification needs a backend, and there are two. The `claude
+/login` above is one; the other is any OpenAI-compatible endpoint, set
+with `INFOGUANA_CLASSIFY_BASE_URL` in `.env` (see `.env.example`). The
+second is the path for an install with no Claude CLI on the host —
+without either, notes are still saved, but they land untyped and
+untagged.
+
 On Linux/macOS, use `python3` if `python` isn't on your PATH.
 
 No `.env` *editing* required — every setting has a default. The file does
@@ -212,12 +222,16 @@ the repo root to override (see `.env.example`).
 
 ## Auto-inject project context on first prompt
 
-Claude Code's MCP gives the agent infoguana on demand, but it has to
-remember to call `context` itself. To skip the cold-start step, install
-the `SessionStart` hooks that ship with this repo — they pack the
-project's preview-mode infoguana context (~70 short note previews)
-directly into the agent's first turn, so architecture / open work / hard
-rules are visible inline before answering anything.
+MCP gives the agent infoguana on demand, but it has to remember to call
+`context` itself. To skip the cold-start step, install the `SessionStart`
+hooks that ship with this repo — they pack the project's preview-mode
+infoguana context directly into the agent's first turn, so architecture,
+open work and hard rules are visible inline before answering anything.
+At the default 4000-token budget that is roughly 25 note previews
+alongside the rules and the skill manifest, which are sent in full and
+are exempt from that budget. Budget for the first turn accordingly: the
+whole pack measures 10k-20k tokens on a real corpus, most of it the
+rules, so the 4000 bounds the memories rather than the injection.
 
 ```bash
 python scripts/install-infoguana-hooks.py
@@ -409,8 +423,9 @@ regenerates its block.
 
 ## Wire up a project
 
-For each project where Claude Code should use infoguana, drop a small
-`CLAUDE.md` that tells the agent to consult infoguana on every task.
+For each project where your agent should use infoguana, drop a small
+instruction file that tells it to consult infoguana on every task —
+`CLAUDE.md` for Claude Code, `AGENTS.md` for Codex.
 There are two ways to put one in place, depending on whether you want
 the file committed or kept user-private:
 

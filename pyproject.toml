@@ -1,7 +1,7 @@
 [project]
 name = "infoguana"
 version = "0.2.0"
-description = "Infoguana — cross-project second brain with semantic search and MCP integration"
+description = "Infoguana — cross-project memory for LLM agents with hybrid retrieval and MCP integration"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

@@ -4,6 +4,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.error
+import urllib.request
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Optional
@@ -162,6 +164,12 @@ def _extract_json(raw: str) -> Optional[dict]:
         return None
 
 
+# Longest string accepted as a classified project name. Real names are
+# short identifiers (a repo or directory basename); anything longer is a
+# model answering the question in prose.
+PROJECT_NAME_MAX_CHARS = 60
+
+
 def _parse(raw_output: str, is_image: bool) -> Optional[Classification]:
     data = _extract_json(raw_output)
     if not data:
@@ -181,6 +189,20 @@ def _parse(raw_output: str, is_image: bool) -> Optional[Classification]:
     project = data.get("project")
     if project is not None:
         project = str(project).strip() or None
+        if project and len(project) > PROJECT_NAME_MAX_CHARS:
+            # The one classifier field with no bound. `preview` is clamped,
+            # `tags` is sliced to 5, `description` is dropped outside image
+            # mode — but `project` is stored verbatim and then serialized
+            # into every note dict search/similar/context return, so a
+            # model that answers with a sentence costs those tokens on
+            # every hit for that note, permanently. Discarded rather than
+            # truncated: a cut-off project name is still a namespace that
+            # matches nothing, so it buys the cost without the benefit.
+            # Only reachable in practice since classification can be
+            # routed to a small local model.
+            log.warning("discarding implausible classified project %.80r",
+                        project)
+            project = None
 
     title = data.get("title")
     if title is not None:
@@ -231,17 +253,157 @@ def _downscaled_copy(src: Path, stack: ExitStack) -> Path:
         return src
 
 
-def classify(content: str, image_paths: Optional[list[Path]] = None,
-             timeout: float = 120.0) -> Optional[Classification]:
-    """Classify a note via `claude -p`. With image_paths, the CLI is asked to
-    also produce a searchable description of the image(s). Returns None if
-    the claude CLI is unavailable or the call fails."""
-    bin_path = shutil.which(settings.claude_bin)
-    if not bin_path:
-        log.info("claude CLI not found at %r, skipping classification", settings.claude_bin)
+def _classify_http(prompt: str, timeout: float) -> Optional[Classification]:
+    """Classify against an OpenAI-compatible /chat/completions endpoint.
+
+    Deliberately hand-rolled over urllib rather than pulling in an SDK: the
+    surface used here is one POST, and the endpoint may be LM Studio,
+    Ollama, vLLM or OpenAI itself. Returns None on any failure so the
+    caller falls back exactly as it does when the CLI is missing.
+
+    `timeout` is the caller's, not `settings.classify_timeout`. The two
+    disagreed by half again (120 vs 180), and the parameter reached only
+    the CLI path — so `classify(..., timeout=15)` would silently keep a
+    180s bound on any machine with `INFOGUANA_CLASSIFY_BASE_URL` set,
+    which is exactly where a hung request is most likely.
+
+    Always parses as text. The HTTP path never sends images (see
+    `classify`), so there is no image-mode result to parse.
+    """
+    url = settings.classify_base_url.rstrip("/") + "/chat/completions"  # type: ignore[union-attr]
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "model": settings.classify_model,
+        "messages": [{"role": "user", "content": prompt}],
+        # Low but non-zero: classification is near-deterministic, yet 0.0
+        # makes some local models loop on repeated tokens.
+        "temperature": 0.2,
+        "max_tokens": 600,
+    }
+
+    def post(body: dict) -> Optional[dict]:
+        req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                     headers=headers, method="POST")
+        if settings.classify_api_key:
+            # Unredirected, so the key is not replayed onto a 30x target.
+            # `urlopen` follows redirects by default and
+            # `HTTPRedirectHandler.redirect_request` copies every header
+            # except Content-Length/Content-Type onto the follow-up
+            # request — Authorization is not excluded, so a key set in a
+            # plain `headers` dict rides along cross-origin. Set here
+            # rather than at the top because the Request is rebuilt per
+            # attempt by the max_completion_tokens retry.
+            req.add_unredirected_header(
+                "Authorization", f"Bearer {settings.classify_api_key}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    try:
+        try:
+            body = post(payload)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            # OpenAI's newer models reject `max_tokens` and require
+            # `max_completion_tokens`; older models and most local servers
+            # only understand the former. Rather than maintain a model list,
+            # send the common spelling and switch on being told to.
+            if e.code == 400 and "max_completion_tokens" in detail:
+                payload["max_completion_tokens"] = payload.pop("max_tokens")
+                body = post(payload)
+            else:
+                log.warning("classify endpoint %s returned HTTP %s: %.300s",
+                            url, e.code, detail)
+                return None
+        raw = body["choices"][0]["message"]["content"]  # type: ignore[index]
+        if not isinstance(raw, str):
+            # `content` is not reliably a string. Servers return null for a
+            # reasoning-only or tool-call response and for some empty
+            # completions, and several return a list of content parts.
+            # Raised rather than returned so the shape handler below logs
+            # it: `_parse` runs outside this block, so an unguarded value
+            # reaches `.strip()` and the AttributeError escapes
+            # `classify()` entirely — which breaks its contract of
+            # returning None on failure and aborts `process_note` before
+            # the note is ever embedded, leaving it invisible to semantic
+            # search with nothing to re-run it.
+            raise TypeError(f"content is {type(raw).__name__}, not str")
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        log.warning("classify endpoint %s unreachable: %s", url, e)
+        return None
+    except (KeyError, IndexError, TypeError, ValueError):
+        log.exception("classify endpoint %s returned an unexpected shape", url)
         return None
 
+    parsed = _parse(raw, is_image=False)
+    if parsed is None:
+        # Small local models drop fields or wrap output in prose. Say so —
+        # the note would otherwise land untagged and `unsorted` with nothing
+        # in the log to explain why.
+        log.warning("classify model %r returned unparseable output: %.200r",
+                    settings.classify_model, raw)
+    return parsed
+
+
+def classify(content: str, image_paths: Optional[list[Path]] = None,
+             timeout: Optional[float] = None) -> Optional[Classification]:
+    """Classify a note.
+
+    `timeout` defaults to `settings.classify_timeout` — resolved here at
+    call time rather than in the signature so the setting stays live. It
+    was previously a hardcoded 120.0 that no caller overrode, which made
+    `INFOGUANA_CLASSIFY_TIMEOUT` documentation for a knob nothing read:
+    an operator raising it to accommodate a slow local model still got
+    cut off at 120s, and the note landed unsorted.
+
+    Uses an OpenAI-compatible HTTP endpoint when `classify_base_url` is set,
+    otherwise shells out to `claude -p`. With image_paths, the model is
+    asked to also produce a searchable description of the image(s). Returns
+    None if no backend is available or the call fails — callers fall back to
+    `derive_fallback_preview` and leave the note `unsorted`.
+    """
+    if timeout is None:
+        timeout = settings.classify_timeout
     has_images = bool(image_paths)
+
+    # The HTTP backend cannot send images: the CLI takes attachments as
+    # @path references, and a vision endpoint would need the base64
+    # image_url content-part form. So it handles text, and images fall
+    # through to the CLI when one is installed — setting a base_url is a
+    # cheaper text backend, not an instruction to give up capability the
+    # machine still has.
+    use_http = bool(settings.classify_base_url) and not has_images
+    if use_http:
+        prompt = TEXT_PROMPT.format(content=content.strip() or "(no text)")
+        return _classify_http(prompt, timeout=timeout)
+
+    bin_path = shutil.which(settings.claude_bin)
+    if not bin_path:
+        if settings.classify_base_url and has_images:
+            if not content.strip():
+                # Nothing to degrade to. With text alongside the image,
+                # classifying the text is a defensible partial result — but
+                # an image-only note has none, so the model would classify
+                # the literal string "(no text)" and return a type, tags
+                # and project describing nothing. Those invented tags are
+                # then the only text the note contributes to search (the
+                # notes_fts triggers index tags and the embedding text
+                # appends them), since text-mode parsing drops
+                # `description`. Unsorted is recoverable; findable under
+                # the wrong words is not.
+                log.info("no claude CLI and the note is image-only (%d "
+                         "image(s), no text) — leaving it unsorted rather "
+                         "than classifying an empty prompt",
+                         len(image_paths or []))
+                return None
+            # There is text to work from, so a partial result beats none.
+            log.info("no claude CLI; classifying text over HTTP and "
+                     "skipping %d image(s)", len(image_paths or []))
+            prompt = TEXT_PROMPT.format(content=content.strip())
+            return _classify_http(prompt, timeout=timeout)
+        log.info("claude CLI not found at %r and no classify_base_url set, "
+                 "skipping classification", settings.claude_bin)
+        return None
+
     template = IMAGE_PROMPT if has_images else TEXT_PROMPT
     prompt_body = template.format(content=content.strip() or "(no text)")
 

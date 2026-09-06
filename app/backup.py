@@ -56,8 +56,31 @@ def _sync_to_nas(target: Path) -> None:
         if not src.exists():
             continue
         dst.mkdir(parents=True, exist_ok=True)
-        # trailing slash on src: copy contents, not the dir itself
-        cmd = [rsync, "-a", "--delete", f"{src}/", f"{dst}/"]
+        # trailing slash on src: copy contents, not the dir itself.
+        #
+        # Deliberately NOT `-a`. That implies `-p`/`-o`/`-g`, and the usual
+        # destination here is a network share (CIFS/SMB) that cannot honor
+        # POSIX permissions or ownership. rsync writes to a temp file,
+        # fails to chmod it, and then cannot rename it into place — the
+        # whole run aborts with rc=23 partway through, so the mirror is
+        # left incomplete and every later run fails the same way. Observed
+        # against a CIFS mount: "failed to set permissions ... No such file
+        # or directory (2)" followed by a rename failure on the same path.
+        #
+        # `-rlt` keeps what actually matters for a backup mirror: recurse,
+        # preserve symlinks and mtimes.
+        #
+        # Deliberately NOT `--inplace`, even though it would also avoid the
+        # failing rename. Without it rsync writes a temp file and renames,
+        # so a destination snapshot is either the complete old file or the
+        # complete new one. Writing in place means an interrupted run — the
+        # share dropping, the container restarting, exactly the flakiness
+        # this function has to survive — leaves a half-old, half-new file
+        # under a valid snapshot name, and `--delete` may already have
+        # pruned the last good copy. A backup that looks restorable and is
+        # not is worse than a backup that is visibly missing.
+        cmd = [rsync, "-rlt", "--no-perms", "--no-owner",
+               "--no-group", "--delete", f"{src}/", f"{dst}/"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             log.warning("rsync %s -> %s failed (rc=%d): %s",

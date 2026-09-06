@@ -164,6 +164,12 @@ def _extract_json(raw: str) -> Optional[dict]:
         return None
 
 
+# Longest string accepted as a classified project name. Real names are
+# short identifiers (a repo or directory basename); anything longer is a
+# model answering the question in prose.
+PROJECT_NAME_MAX_CHARS = 60
+
+
 def _parse(raw_output: str, is_image: bool) -> Optional[Classification]:
     data = _extract_json(raw_output)
     if not data:
@@ -183,6 +189,20 @@ def _parse(raw_output: str, is_image: bool) -> Optional[Classification]:
     project = data.get("project")
     if project is not None:
         project = str(project).strip() or None
+        if project and len(project) > PROJECT_NAME_MAX_CHARS:
+            # The one classifier field with no bound. `preview` is clamped,
+            # `tags` is sliced to 5, `description` is dropped outside image
+            # mode — but `project` is stored verbatim and then serialized
+            # into every note dict search/similar/context return, so a
+            # model that answers with a sentence costs those tokens on
+            # every hit for that note, permanently. Discarded rather than
+            # truncated: a cut-off project name is still a namespace that
+            # matches nothing, so it buys the cost without the benefit.
+            # Only reachable in practice since classification can be
+            # routed to a small local model.
+            log.warning("discarding implausible classified project %.80r",
+                        project)
+            project = None
 
     title = data.get("title")
     if title is not None:
@@ -295,6 +315,18 @@ def _classify_http(prompt: str, timeout: float) -> Optional[Classification]:
                             url, e.code, detail)
                 return None
         raw = body["choices"][0]["message"]["content"]  # type: ignore[index]
+        if not isinstance(raw, str):
+            # `content` is not reliably a string. Servers return null for a
+            # reasoning-only or tool-call response and for some empty
+            # completions, and several return a list of content parts.
+            # Raised rather than returned so the shape handler below logs
+            # it: `_parse` runs outside this block, so an unguarded value
+            # reaches `.strip()` and the AttributeError escapes
+            # `classify()` entirely — which breaks its contract of
+            # returning None on failure and aborts `process_note` before
+            # the note is ever embedded, leaving it invisible to semantic
+            # search with nothing to re-run it.
+            raise TypeError(f"content is {type(raw).__name__}, not str")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         log.warning("classify endpoint %s unreachable: %s", url, e)
         return None
@@ -313,8 +345,15 @@ def _classify_http(prompt: str, timeout: float) -> Optional[Classification]:
 
 
 def classify(content: str, image_paths: Optional[list[Path]] = None,
-             timeout: float = 120.0) -> Optional[Classification]:
+             timeout: Optional[float] = None) -> Optional[Classification]:
     """Classify a note.
+
+    `timeout` defaults to `settings.classify_timeout` — resolved here at
+    call time rather than in the signature so the setting stays live. It
+    was previously a hardcoded 120.0 that no caller overrode, which made
+    `INFOGUANA_CLASSIFY_TIMEOUT` documentation for a knob nothing read:
+    an operator raising it to accommodate a slow local model still got
+    cut off at 120s, and the note landed unsorted.
 
     Uses an OpenAI-compatible HTTP endpoint when `classify_base_url` is set,
     otherwise shells out to `claude -p`. With image_paths, the model is
@@ -322,36 +361,45 @@ def classify(content: str, image_paths: Optional[list[Path]] = None,
     None if no backend is available or the call fails — callers fall back to
     `derive_fallback_preview` and leave the note `unsorted`.
     """
+    if timeout is None:
+        timeout = settings.classify_timeout
     has_images = bool(image_paths)
 
-    if settings.classify_base_url:
-        if has_images and not content.strip():
-            # Nothing to degrade to. With text alongside the image,
-            # classifying the text is a defensible partial result — but an
-            # image-only note has none, so the model would be classifying
-            # the literal string "(no text)" and returning a type and tags
-            # that describe nothing. Text-mode parsing then forces
-            # `description=None`, which is the only text an image-only
-            # note contributes to FTS and the embedding: the note lands
-            # confidently mislabelled and effectively unsearchable.
-            # Unsorted is recoverable; a confident wrong label is not.
-            log.info("classify endpoint is HTTP and the note is image-only "
-                     "(%d image(s), no text) — leaving it unsorted rather "
-                     "than classifying an empty prompt",
-                     len(image_paths or []))
-            return None
-        if has_images:
-            # Attachments are passed to the CLI as @path references, which
-            # has no equivalent here; a vision endpoint would need the
-            # base64 image_url content-part form. Classify the text so the
-            # note still gets a type and tags.
-            log.info("classify endpoint is HTTP; skipping %d image(s), text only",
-                     len(image_paths or []))
+    # The HTTP backend cannot send images: the CLI takes attachments as
+    # @path references, and a vision endpoint would need the base64
+    # image_url content-part form. So it handles text, and images fall
+    # through to the CLI when one is installed — setting a base_url is a
+    # cheaper text backend, not an instruction to give up capability the
+    # machine still has.
+    use_http = bool(settings.classify_base_url) and not has_images
+    if use_http:
         prompt = TEXT_PROMPT.format(content=content.strip() or "(no text)")
         return _classify_http(prompt, timeout=timeout)
 
     bin_path = shutil.which(settings.claude_bin)
     if not bin_path:
+        if settings.classify_base_url and has_images:
+            if not content.strip():
+                # Nothing to degrade to. With text alongside the image,
+                # classifying the text is a defensible partial result — but
+                # an image-only note has none, so the model would classify
+                # the literal string "(no text)" and return a type, tags
+                # and project describing nothing. Those invented tags are
+                # then the only text the note contributes to search (the
+                # notes_fts triggers index tags and the embedding text
+                # appends them), since text-mode parsing drops
+                # `description`. Unsorted is recoverable; findable under
+                # the wrong words is not.
+                log.info("no claude CLI and the note is image-only (%d "
+                         "image(s), no text) — leaving it unsorted rather "
+                         "than classifying an empty prompt",
+                         len(image_paths or []))
+                return None
+            # There is text to work from, so a partial result beats none.
+            log.info("no claude CLI; classifying text over HTTP and "
+                     "skipping %d image(s)", len(image_paths or []))
+            prompt = TEXT_PROMPT.format(content=content.strip())
+            return _classify_http(prompt, timeout=timeout)
         log.info("claude CLI not found at %r and no classify_base_url set, "
                  "skipping classification", settings.claude_bin)
         return None

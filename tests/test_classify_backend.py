@@ -177,21 +177,34 @@ def test_unparseable_model_output_returns_none(http_backend, monkeypatch):
     assert C.classify("text") is None
 
 
-# --- images have no HTTP equivalent ----------------------------------------
+# --- images: the HTTP backend cannot send them ---------------------------
 
-def test_image_only_note_is_left_unsorted_rather_than_mislabelled(
+def test_images_fall_through_to_the_cli_when_one_is_installed(
         http_backend, monkeypatch, tmp_path):
-    """With no text there is nothing to degrade to: the model would classify
-    the literal string "(no text)" and return a confident label describing
-    nothing, and text-mode parsing drops `description` — the only field an
-    image-only note contributes to search. Unsorted is recoverable."""
+    """Setting a base_url is a cheaper text backend, not an instruction to
+    give up image classification the machine can still do. The HTTP path
+    has no way to send an attachment, so images must reach the CLI."""
+    monkeypatch.setattr(C.shutil, "which", lambda *_: "/usr/bin/claude")
     monkeypatch.setattr(C.urllib.request, "urlopen", lambda *a, **k:
-                        pytest.fail("classified an image-only note over HTTP"))
-    assert C.classify("   ", image_paths=[tmp_path / "a.png"]) is None
+                        pytest.fail("sent an image note to the HTTP backend"))
+    calls = []
+
+    class _Done:
+        returncode = 1
+        stdout = ""
+        stderr = "stub"
+    monkeypatch.setattr(C.subprocess, "run",
+                        lambda *a, **k: (calls.append(a), _Done())[1])
+    img = tmp_path / "a.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    C.classify("text", image_paths=[img])
+    assert calls, "image note never reached the CLI"
 
 
-def test_image_with_text_classifies_the_text(http_backend, monkeypatch, tmp_path):
-    """A partial result is defensible when there is text to work from."""
+def test_image_with_text_uses_http_when_no_cli_is_available(
+        http_backend, monkeypatch, tmp_path):
+    """A partial result beats none: classify the text, skip the images."""
+    monkeypatch.setattr(C.shutil, "which", lambda *_: None)
     seen = {}
     def fake(req, timeout=None):
         seen["body"] = json.loads(req.data); return _ok(GOOD)
@@ -199,3 +212,58 @@ def test_image_with_text_classifies_the_text(http_backend, monkeypatch, tmp_path
     got = C.classify("a real sentence", image_paths=[tmp_path / "a.png"])
     assert got is not None and got.type == "memory"
     assert "a real sentence" in seen["body"]["messages"][0]["content"]
+
+
+def test_image_only_note_is_left_unsorted_when_no_cli_is_available(
+        http_backend, monkeypatch, tmp_path):
+    """With no text and no CLI there is nothing to degrade to. The model
+    would classify the literal string "(no text)" and invent tags, which
+    are then the only text the note contributes to search — text-mode
+    parsing drops `description`. Unsorted is recoverable; findable under
+    the wrong words is not."""
+    monkeypatch.setattr(C.shutil, "which", lambda *_: None)
+    monkeypatch.setattr(C.urllib.request, "urlopen", lambda *a, **k:
+                        pytest.fail("classified an image-only note over HTTP"))
+    assert C.classify("   ", image_paths=[tmp_path / "a.png"]) is None
+
+
+# --- classified project names are bounded --------------------------------
+
+def test_an_implausible_project_name_is_discarded(http_backend, monkeypatch):
+    """`project` is the one classifier field with no cap, and it is
+    serialized into every preview-mode hit for the note. Discarded rather
+    than truncated: a cut-off name is still a namespace matching nothing."""
+    long_project = "this is a sentence about where the note belongs " * 3
+    monkeypatch.setattr(C.urllib.request, "urlopen", lambda req, timeout=None:
+                        _ok(json.dumps({"type": "memory", "tags": [],
+                                        "project": long_project,
+                                        "title": "T", "description": "D"})))
+    got = C.classify("text")
+    assert got is not None and got.project is None
+
+
+def test_a_normal_project_name_survives(http_backend, monkeypatch):
+    monkeypatch.setattr(C.urllib.request, "urlopen", lambda req, timeout=None:
+                        _ok(json.dumps({"type": "memory", "tags": [],
+                                        "project": "infoguana",
+                                        "title": "T", "description": "D"})))
+    got = C.classify("text")
+    assert got is not None and got.project == "infoguana"
+
+
+# --- a hostile or broken response must not escape classify() -------------
+
+@pytest.mark.parametrize("content", [None, [{"type": "text", "text": "hi"}], 42])
+def test_non_string_content_returns_none_instead_of_raising(
+        http_backend, monkeypatch, content):
+    """Servers return null content for reasoning-only and tool-call
+    responses, and some return a list of content parts. `_parse` runs
+    outside the request's try block, so an unguarded value reaches
+    `.strip()` and the AttributeError escapes `classify()` — breaking its
+    contract of returning None, and aborting `process_note` before the
+    note is ever embedded. It then has no preview and no vector row, is
+    invisible to semantic search, and nothing re-runs the pipeline."""
+    monkeypatch.setattr(C.urllib.request, "urlopen", lambda req, timeout=None:
+                        _Resp(json.dumps(
+                            {"choices": [{"message": {"content": content}}]}).encode()))
+    assert C.classify("text") is None

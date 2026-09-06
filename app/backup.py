@@ -67,11 +67,19 @@ def _sync_to_nas(target: Path) -> None:
         # against a CIFS mount: "failed to set permissions ... No such file
         # or directory (2)" followed by a rename failure on the same path.
         #
-        # `-rlt` keeps what actually matters for a backup mirror (recurse,
-        # symlinks, mtimes) and `--inplace` skips the temp-and-rename dance
-        # that is the step failing. These are database snapshots written
-        # once and never modified, so writing in place costs nothing.
-        cmd = [rsync, "-rlt", "--inplace", "--no-perms", "--no-owner",
+        # `-rlt` keeps what actually matters for a backup mirror: recurse,
+        # preserve symlinks and mtimes.
+        #
+        # Deliberately NOT `--inplace`, even though it would also avoid the
+        # failing rename. Without it rsync writes a temp file and renames,
+        # so a destination snapshot is either the complete old file or the
+        # complete new one. Writing in place means an interrupted run — the
+        # share dropping, the container restarting, exactly the flakiness
+        # this function has to survive — leaves a half-old, half-new file
+        # under a valid snapshot name, and `--delete` may already have
+        # pruned the last good copy. A backup that looks restorable and is
+        # not is worse than a backup that is visibly missing.
+        cmd = [rsync, "-rlt", "--no-perms", "--no-owner",
                "--no-group", "--delete", f"{src}/", f"{dst}/"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:

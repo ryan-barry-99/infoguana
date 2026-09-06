@@ -8,8 +8,8 @@ aborts with rc=23 partway through and the mirror is left incomplete.
 This asserts the flag set rather than reproducing the failure: the abort is
 environmental and intermittent (it depends on the share and on load), so
 there is no honest way to make a unit test fail against the old flags. What
-is pinned here is the decision — that permission-preserving flags stay out
-and `--inplace` stays in.
+is pinned here is the decision — that permission-preserving flags stay
+out, and that `--inplace` stays out so each snapshot lands atomically.
 """
 from __future__ import annotations
 
@@ -48,11 +48,15 @@ def test_permission_and_ownership_preservation_are_disabled(monkeypatch, tmp_pat
             assert flag in cmd, (flag, cmd)
 
 
-def test_inplace_is_used(monkeypatch, tmp_path):
-    """`--inplace` skips the temp-file-and-rename step that fails. Safe
-    here because these are snapshots written once and never modified."""
+def test_inplace_is_not_used(monkeypatch, tmp_path):
+    """Atomicity matters more than avoiding the rename. Writing in place
+    would let an interrupted run leave a half-written file under a valid
+    snapshot name, with `--delete` having possibly pruned the last good
+    copy — a backup that looks restorable and is not. Disabling permission
+    preservation is what actually fixes the abort; verified against a real
+    CIFS share that `-rlt --no-perms` completes without it."""
     for cmd in _captured_cmds(monkeypatch, tmp_path):
-        assert "--inplace" in cmd, cmd
+        assert "--inplace" not in cmd, cmd
 
 
 def test_recursion_links_and_times_are_still_preserved(monkeypatch, tmp_path):

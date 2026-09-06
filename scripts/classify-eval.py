@@ -19,7 +19,7 @@ here", which is the right question for a migration and the wrong one for
     # local server
     scripts/classify-eval.py --http http://127.0.0.1:1234/v1 --model gemma-2-9b-it
 
-    # hosted, key from INFOGUANA_CLASSIFY_API_KEY or --api-key
+    # hosted; export INFOGUANA_CLASSIFY_API_KEY first
     scripts/classify-eval.py --http https://api.openai.com/v1 --model gpt-4o-mini
 
     # the current default (Claude CLI), to sanity-check the harness itself
@@ -61,8 +61,9 @@ def main() -> int:
     src.add_argument("--claude", action="store_true",
                      help="use the Claude CLI backend")
     ap.add_argument("--model", required=True)
-    ap.add_argument("--api-key", default=None,
-                    help="defaults to INFOGUANA_CLASSIFY_API_KEY")
+    # No key flag on purpose: a secret in argv is world-readable through
+    # /proc/<pid>/cmdline for the life of the run, and lands in shell
+    # history besides. Export INFOGUANA_CLASSIFY_API_KEY instead.
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--project", default=None, help="restrict to one project")
     ap.add_argument("--seed-id", type=int, default=None, metavar="MAX_ID",
@@ -76,8 +77,6 @@ def main() -> int:
     os.environ["INFOGUANA_CLASSIFY_MODEL"] = args.model
     if args.http:
         os.environ["INFOGUANA_CLASSIFY_BASE_URL"] = args.http
-        if args.api_key:
-            os.environ["INFOGUANA_CLASSIFY_API_KEY"] = args.api_key
     else:
         os.environ.pop("INFOGUANA_CLASSIFY_BASE_URL", None)
 

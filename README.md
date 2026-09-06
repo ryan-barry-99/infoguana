@@ -4,11 +4,13 @@
 
 Iguanas are ectotherms that depend on external heat to function.
 Infoguana — *info* + *iguana* — gives LLM agents the same kind of
-external lifeline: a cross-project second brain with typed-graph notes,
+external lifeline: a cross-project memory with typed-graph notes,
 hybrid retrieval, and MCP integration. FastAPI + SQLite (with
 sqlite-vec + FTS5) + HTMX UI + MCP. Captures notes from phone/laptop,
-classifies them via Claude Code CLI, and serves them to project-local
-Claude agents over MCP so each agent is backed by a bigger shared memory.
+classifies them through the Claude CLI or any OpenAI-compatible endpoint,
+and serves them to any MCP-capable agent — Claude Code and Codex both
+ship with an installer — so every agent, in every repository, is backed
+by the same shared memory.
 
 ## How it works
 
@@ -29,7 +31,8 @@ an agent can triage 20 results for a few hundred tokens and only pull full
 bodies (`get` / `get_many` / `expand_top=N`) for the ones worth quoting.
 
 **SessionStart loads a layered, token-budgeted context pack.** On a new
-Claude Code session, the hook packs the agent's first turn with: a
+session — Claude Code or Codex, both ship a hook — the agent's first
+turn is packed with: a
 **skill manifest** (one line per available skill — name, id, and trigger
 condition — exempt from the token budget, with bodies fetched by id on
 demand), **global-scope rules** (cross-project guidance the agent must follow
@@ -212,12 +215,14 @@ the repo root to override (see `.env.example`).
 
 ## Auto-inject project context on first prompt
 
-Claude Code's MCP gives the agent infoguana on demand, but it has to
-remember to call `context` itself. To skip the cold-start step, install
-the `SessionStart` hooks that ship with this repo — they pack the
-project's preview-mode infoguana context (~70 short note previews)
-directly into the agent's first turn, so architecture / open work / hard
-rules are visible inline before answering anything.
+MCP gives the agent infoguana on demand, but it has to remember to call
+`context` itself. To skip the cold-start step, install the `SessionStart`
+hooks that ship with this repo — they pack the project's preview-mode
+infoguana context directly into the agent's first turn, so architecture,
+open work and hard rules are visible inline before answering anything.
+At the default 4000-token budget that is roughly 25 note previews
+alongside the rules and the skill manifest, which are sent in full and
+are exempt from that budget.
 
 ```bash
 python scripts/install-infoguana-hooks.py
